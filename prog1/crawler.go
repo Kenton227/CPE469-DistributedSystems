@@ -42,6 +42,9 @@ func main() {
 		urls = processUrl(urls, invIndex, visitedUrls, &visited, stopWords)
 	}
 
+	// TODO: remove
+	fmt.Println(invIndex)
+
 	// TODO: store invIndex in one JSON file
 	// TODO: print first 10 keywords in index
 	// TODO: record time needed to fetch and index content
@@ -105,16 +108,15 @@ func processUrl(
 	}
 
 	// process text from body
-	processText(htmlNode, invIndex, stopWords)
+	processText(htmlNode, url, invIndex, stopWords)
 
 	// TODO: process links
 
 	return urls
 }
 
-func processText(htmlNode *html.Node, invIndex map[string][]string, stopWords map[string]bool) {
-	// TODO: extract text from htmlNode
-
+// TODO: add comment
+func processText(htmlNode *html.Node, url string, invIndex map[string][]string, stopWords map[string]bool) {
 	// extract text if node is TextNode
 	if htmlNode.Type == html.TextNode {
 		// clean data string
@@ -123,25 +125,34 @@ func processText(htmlNode *html.Node, invIndex map[string][]string, stopWords ma
 		// convert data string to word list
 		words := strings.Fields(cleanData)
 
-		fmt.Println(words)
-		fmt.Println("_____")
-
-		// TODO: store in inverted index; each word : url
-
-		// store words in inverted table
+		// store words in invIndex
 		for _, word := range words {
 			// dont include stop words
 			if !stopWords[word] {
-				//invIndex[word] =
+				addToInvIndex(word, url, invIndex)
 			}
 		}
 	}
 
 	// recursively process children
-	// for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
-	// 	processText(childNode, invIndex, stopWords)
-	// }
+	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
+		processText(childNode, url, invIndex, stopWords)
+	}
+}
 
+/* adds word : url to invIndex while avoiding duplicate urls */
+func addToInvIndex(word string, url string, invIndex map[string][]string) {
+	// check if duplicate url
+	valueUrls := invIndex[word]
+	for _, valueUrl := range valueUrls {
+		if valueUrl == url {
+			return
+			fmt.Println("DUPLICATE URL")
+		}
+	}
+
+	// add url to invIndex
+	invIndex[word] = append(valueUrls, url)
 }
 
 /* returns inputted string with punctuation removed */
