@@ -46,22 +46,19 @@ func main() {
 	// TODO: print first 10 keywords in index
 	// TODO: record time needed to fetch and index content
 
-	// end timer
-	elapsedTime := time.Since(startTime)
+	elapsedTime := time.Since(startTime) // end timer
 	fmt.Println("Elapsed time:", elapsedTime)
 }
 
-/* returns map of stop words from stopWordsFile */
+/* Returns map of stop words from stopWordsFile. */
 func getStopWords() map[string]bool {
-	// open file with stop words
-	fptr, err := os.Open(stopWordsFile)
-	// TODO: decide if we should quit or just return nothing
-	if err != nil {
+
+	fptr, err := os.Open(stopWordsFile) // open file with stop words
+	if err != nil {                     // TODO: decide if we should quit or just return nothing
 		panic(err)
 	}
 	defer fptr.Close()
 
-	// create map of stop words
 	stopWords := make(map[string]bool)
 	scanner := bufio.NewScanner(fptr)
 	for scanner.Scan() {
@@ -72,7 +69,13 @@ func getStopWords() map[string]bool {
 }
 
 /* stores each word from url into inverted index, updates visited, and returns new urls list*/
-func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[string]bool, visited *int, stopWords map[string]bool) []string {
+func processUrl(
+	urls []string,
+	invIndex map[string][]string,
+	visitedUrls map[string]bool,
+	visited *int,
+	stopWords map[string]bool,
+) []string {
 	// pop first url
 	url := urls[0]
 	urls = urls[1:]
@@ -82,7 +85,6 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 		return urls
 	}
 
-	// mark url as visited
 	visitedUrls[url] = true
 	logUrl(url, visited)
 
@@ -105,12 +107,11 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 	// process text from body
 	processText(htmlNode, invIndex, stopWords)
 
-	// process links
+	// TODO: process links
 
 	return urls
 }
 
-// TODO: add comment
 func processText(htmlNode *html.Node, invIndex map[string][]string, stopWords map[string]bool) {
 	// TODO: extract text from htmlNode
 
@@ -137,9 +138,9 @@ func processText(htmlNode *html.Node, invIndex map[string][]string, stopWords ma
 	}
 
 	// recursively process children
-	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
-		processText(childNode, invIndex, stopWords)
-	}
+	// for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
+	// 	processText(childNode, invIndex, stopWords)
+	// }
 
 }
 
