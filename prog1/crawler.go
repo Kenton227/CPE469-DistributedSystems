@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"time"
-	"net/http"
+
 	"golang.org/x/net/html"
 )
 
@@ -19,11 +20,10 @@ const logFile = "visitedUrls.txt"
 */
 
 func main() {
-	// store arguments as list
-	urls := os.Args[1:]
 
-	// start timer
-	startTime := time.Now()
+	startTime := time.Now() // start timer
+
+	urls := os.Args[1:]
 
 	// initialize inverted index and visited url map
 	invIndex := make(map[string][]string)
@@ -45,7 +45,12 @@ func main() {
 }
 
 /* stores each word from url into inverted index, updates visited, and returns new urls list*/
-func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[string]bool, visited *int) []string {
+func processUrl(
+	urls []string,
+	invIndex map[string][]string,
+	visitedUrls map[string]bool,
+	visited *int,
+) []string {
 	// pop first url
 	url := urls[0]
 	urls = urls[1:]
@@ -59,7 +64,6 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 	visitedUrls[url] = true
 	logUrl(url, visited)
 
-
 	// TODO: remove
 	fmt.Println("Processing:", url)
 
@@ -69,7 +73,7 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 		panic(err)
 	}
 	defer resp.Body.Close()
-	
+
 	// get parse tree from html body
 	htmlNode, err := html.Parse(resp.Body)
 	if err != nil {
