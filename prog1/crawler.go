@@ -18,10 +18,10 @@ const stopWordsFile = "stopWords.txt"
 
 /*
 	Questions:
-	do we record timestamp for each url
-	should we add to url log each time we process url or at the end
-	same question but for storing map in JSON file
-	should we delete log file each time we run prog
+	do we record timestamp for each url: record every factor of 10 timestamp
+	should we add to url log each time we process url or at the end: do buffered writes every 1000 maybe
+	same question but for storing map in JSON file: write JSON at end
+	should we delete log file each time we run prog: yes
 */
 
 func main() {
