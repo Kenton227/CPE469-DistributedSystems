@@ -6,16 +6,22 @@ import (
 	"time"
 	"net/http"
 	"golang.org/x/net/html"
+	"strings"
+	"unicode"
+	"bufio"
 )
 
 const maxPages = 1
 const logFile = "visitedUrls.txt"
+const stopWordsFile = "stopWords.txt"
+
 
 /*
 	Questions:
 	do we record timestamp for each url
 	should we add to url log each time we process url or at the end
 	same question but for storing map in JSON file
+	should we delete log file each time we run prog
 */
 
 func main() {
@@ -28,11 +34,12 @@ func main() {
 	// initialize inverted index and visited url map
 	invIndex := make(map[string][]string)
 	visitedUrls := make(map[string]bool)
+	stopWords := getStopWords()
 
 	// iterate through urls, processing each
 	visited := 0
 	for len(urls) > 0 && visited < maxPages {
-		urls = processUrl(urls, invIndex, visitedUrls, &visited)
+		urls = processUrl(urls, invIndex, visitedUrls, &visited, stopWords)
 	}
 
 	// TODO: store invIndex in one JSON file
@@ -44,8 +51,28 @@ func main() {
 	fmt.Println("Elapsed time:", elapsedTime)
 }
 
+/* returns map of stop words from stopWordsFile */
+func getStopWords() map[string]bool {
+	// open file with stop words
+	fptr, err := os.Open(stopWordsFile)
+	// TODO: decide if we should quit or just return nothing
+	if err != nil {
+		panic(err)
+	}
+	defer fptr.Close()
+
+	// create map of stop words
+	stopWords := make(map[string]bool)
+	scanner := bufio.NewScanner(fptr)
+	for scanner.Scan() {
+		stopWords[scanner.Text()] = true
+	}
+
+	return stopWords
+}
+
 /* stores each word from url into inverted index, updates visited, and returns new urls list*/
-func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[string]bool, visited *int) []string {
+func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[string]bool, visited *int, stopWords map[string]bool) []string {
 	// pop first url
 	url := urls[0]
 	urls = urls[1:]
@@ -77,7 +104,7 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 	}
 
 	// process text from body
-	processText(htmlNode, invIndex)
+	processText(htmlNode, invIndex, stopWords)
 
 	// process links
 
@@ -85,11 +112,52 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 }
 
 // TODO: add comment
-func processText(htmlNode *html.Node, invIndex map[string][]string) {
+func processText(htmlNode *html.Node, invIndex map[string][]string, stopWords map[string]bool) {
 	// TODO: extract text from htmlNode
-	// TODO: pre process text data (lowercase, remove punctuation, remove "stop words")
-	// TODO: store in inverted index; each word : url
 
+	// extract text if node is TextNode
+	if htmlNode.Type == html.TextNode {
+		// clean data string
+		cleanData := removePunct(strings.ToLower(htmlNode.Data))
+
+		// convert data string to word list
+		words := strings.Fields(cleanData)
+		
+		fmt.Println(words)
+		fmt.Println("_____")
+
+		// TODO: store in inverted index; each word : url
+
+		// store words in inverted table
+		for _, word := range words {
+			// dont include stop words
+			if !stopWords[word] {
+				//invIndex[word] = 
+			}
+		}
+	}
+
+
+	// recursively process children
+	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
+		processText(childNode, invIndex, stopWords)
+	}
+
+
+}
+
+/* returns inputted string with punctuation removed */
+func removePunct(str string) string {
+	runes := []rune{}
+
+	// append character if not punctuation
+	for _, run := range str {
+		if !unicode.IsPunct(run) {
+			runes = append(runes, run)
+		}
+	}
+
+	return string(runes)
 }
 
 /* logs url to logFile and increments visited counter */
