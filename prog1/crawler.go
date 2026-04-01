@@ -13,9 +13,11 @@ import (
 	"golang.org/x/net/html"
 )
 
-const maxPages = 1
-const logFile = "visitedUrls.txt"
-const stopWordsFile = "stopWords.txt"
+const MAX_PAGES = 10 ^ 7
+const FIRST_MILESTONE = 100
+const MILESTONE_GROWTH_FCTR = 10
+const LOGFILE = "visitedUrls.txt"
+const STOPWORDSFILE = "stopWords.txt"
 
 /*
 	Questions:
@@ -25,38 +27,44 @@ const stopWordsFile = "stopWords.txt"
 	should we delete log file each time we run prog
 */
 
+func printTimeSinceStart(start time.Time) {
+	fmt.Println("Elapsed time:", time.Since(start))
+}
+
 func main() {
 
 	startTime := time.Now() // start timer
+	defer printTimeSinceStart(startTime)
 
-	urls := os.Args[1:]
-
-	// initialize inverted index and visited url map
-	invIndex := make(map[string][]string)
-	visitedUrls := make(map[string]bool)
+	invIndex := make(map[string][]string) // init inverted index and stopwords
 	stopWords := getStopWords()
 
-	// iterate through urls, processing each
-	visited := 0
-	for len(urls) > 0 && visited < maxPages {
-		urls = processUrl(urls, invIndex, visitedUrls, &visited, stopWords)
+	// init LOGFILE
+	fptr, err := os.OpenFile(LOGFILE, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
 	}
+	defer fptr.Close()
+	log := bufio.NewWriter(fptr)
+	defer log.Flush()
+
+	// iterate through urls, processing each
+	urls := os.Args[1:]
+	processUrls(urls, invIndex, stopWords, log, startTime)
 
 	// TODO: remove
-	fmt.Println(invIndex)
+	// fmt.Println(invIndex)
 
 	// TODO: store invIndex in one JSON file
 	// TODO: print first 10 keywords in index
 	// TODO: record time needed to fetch and index content
 
-	elapsedTime := time.Since(startTime) // end timer
-	fmt.Println("Elapsed time:", elapsedTime)
 }
 
-/* Returns map of stop words from stopWordsFile. */
+/* Returns map of stop words from STOPWORDSFILE. */
 func getStopWords() map[string]bool {
 
-	fptr, err := os.Open(stopWordsFile) // open file with stop words
+	fptr, err := os.Open(STOPWORDSFILE) // open file with stop words
 	if err != nil {                     // TODO: decide if we should quit or just return nothing
 		panic(err)
 	}
@@ -71,48 +79,55 @@ func getStopWords() map[string]bool {
 	return stopWords
 }
 
-/* stores each word from url into inverted index, updates visited, and returns new urls list*/
-func processUrl(
+/* stores each word from url into inverted index, updates visited */
+func processUrls(
 	urls []string,
 	invIndex map[string][]string,
-	visitedUrls map[string]bool,
-	visited *int,
 	stopWords map[string]bool,
-) []string {
-	// pop first url
-	url := urls[0]
-	urls = urls[1:]
+	log *bufio.Writer,
+	startTime time.Time,
+) {
 
-	// check if url already processed
-	if visitedUrls[url] {
-		return urls
+	visitedUrls := make(map[string]bool)
+	visited := 0
+	nextMilestone := FIRST_MILESTONE
+	for len(urls) > 0 && visited < MAX_PAGES {
+		url := urls[0] // pop first url
+		urls = urls[1:]
+
+		// check if url already processed
+		if visitedUrls[url] {
+			continue
+		}
+
+		visitedUrls[url] = true
+		visited++
+		logUrl(url, log)
+
+		fmt.Println("Processing:", url) // TODO: remove
+
+		resp, err := http.Get(url)
+		if err != nil {
+			panic(err)
+		}
+		defer resp.Body.Close()
+
+		// get parse tree from html body
+		htmlNode, err := html.Parse(resp.Body)
+		if err != nil {
+			panic(err)
+		}
+
+		processText(htmlNode, url, invIndex, stopWords)
+
+		// TODO: process links
+
+		if visited == nextMilestone {
+			printTimeSinceStart(startTime)
+			nextMilestone *= MILESTONE_GROWTH_FCTR
+		}
 	}
-
-	visitedUrls[url] = true
-	logUrl(url, visited)
-
-	// TODO: remove
-	fmt.Println("Processing:", url)
-
-	// get response from GET request
-	resp, err := http.Get(url)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	// get parse tree from html body
-	htmlNode, err := html.Parse(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-
-	// process text from body
-	processText(htmlNode, url, invIndex, stopWords)
-
-	// TODO: process links
-
-	return urls
+	fmt.Println("Visited:", visited)
 }
 
 // TODO: add comment
@@ -169,20 +184,9 @@ func removePunct(str string) string {
 	return string(runes)
 }
 
-/* logs url to logFile and increments visited counter */
-// NOTE: maybe delete old log file on new crawler run
-func logUrl(url string, visited *int) {
-	*visited++
-
-	// open file
-	fptr, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		panic(err)
-	}
-	defer fptr.Close()
-
-	// write url to file
-	_, err = fptr.WriteString(url + "\n")
+/* logs url to LOGFILE */
+func logUrl(url string, log *bufio.Writer) {
+	_, err := log.WriteString(url + "\n")
 	if err != nil {
 		panic(err)
 	}
