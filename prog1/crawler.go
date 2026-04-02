@@ -9,9 +9,10 @@ import (
 	"strings"
 	"unicode"
 	"bufio"
+	"net/url"
 )
 
-const maxPages = 1
+const maxPages = 10000000
 const logFile = "visitedUrls.txt"
 const stopWordsFile = "stopWords.txt"
 
@@ -24,8 +25,10 @@ const stopWordsFile = "stopWords.txt"
 	should we delete log file each time we run prog: yes
 */
 
+// TODO: make the visitedUrls check only happen once, maybe change it to a queuedUrls check
 func main() {
 	// store arguments as list
+	// NOTE: might want to change this to urlQueue
 	urls := os.Args[1:]
 
 	// start timer
@@ -43,7 +46,7 @@ func main() {
 	}
 
 	// TODO: remove
-	fmt.Println(invIndex)
+	//fmt.Println(invIndex)
 
 	// TODO: store invIndex in one JSON file
 	// TODO: print first 10 keywords in index
@@ -89,10 +92,6 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 	visitedUrls[url] = true
 	logUrl(url, visited)
 
-
-	// TODO: remove
-	fmt.Println("Processing:", url)
-
 	// get response from GET request
 	resp, err := http.Get(url)
 	if err != nil {
@@ -110,11 +109,12 @@ func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[str
 	processText(htmlNode, url, invIndex, stopWords)
 
 	// process links
+	processLinks(htmlNode, url, &urls, visitedUrls)
 
 	return urls
 }
 
-// TODO: add comment
+// takes text from htmlNode and, after cleaning, adds the words to invIndex
 func processText(htmlNode *html.Node, url string, invIndex map[string][]string, stopWords map[string]bool) {
 	// extract text if node is TextNode
 	if htmlNode.Type == html.TextNode {
@@ -137,6 +137,44 @@ func processText(htmlNode *html.Node, url string, invIndex map[string][]string, 
 	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
 		processText(childNode, url, invIndex, stopWords)
 	}
+}
+
+/* recursively finds links from htmlNode and adds them to urls */
+func processLinks(htmlNode *html.Node, url string, urls *[]string, visitedUrls map[string]bool) {
+	// find each link and add it to urls to process
+	if htmlNode.Type == html.ElementNode && htmlNode.Data == "a" {
+		for _, attr := range htmlNode.Attr {
+			if attr.Key == "href" {
+				// get absolute url
+				link := strings.TrimSpace(attr.Val)
+				link = resolveLink(url, link)
+
+				// add link to urls
+				if link != "" && !visitedUrls[link]{
+					*urls = append(*urls, link)
+				}
+			}
+		}
+	}
+
+	// recursively process links
+	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
+		processLinks(childNode, url, urls, visitedUrls)
+	}
+}
+
+/* takes in a baseUrl and a link and returns the absolute path of the link */
+func resolveLink(baseUrl string, link string) string {
+	parsedBase, err := url.Parse(baseUrl)
+	if err != nil {
+		return ""
+	}
+	parsedLink, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+
+	return parsedBase.ResolveReference(parsedLink).String()
 }
 
 /* adds word : url to invIndex while avoiding duplicate urls */
