@@ -10,15 +10,17 @@ import (
 	"bufio"
 	"strings"
 	"unicode"
+	"encoding/json"
 
 	"golang.org/x/net/html"
 )
 
-const MAX_PAGES = 10000000
+const MAX_PAGES = 100
 const FIRST_MILESTONE = 100
 const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
 const STOPWORDSFILE = "stopWords.txt"
+const JSONFILE = "invIndex.json"
 
 /*
 	Questions:
@@ -56,7 +58,8 @@ func main() {
 	// TODO: remove
 	// fmt.Println(invIndex)
 
-	// TODO: store invIndex in one JSON file
+	saveJson(invIndex)
+
 	// TODO: print first 10 keywords in index
 }
 
@@ -76,6 +79,26 @@ func getStopWords() map[string]bool {
 	}
 
 	return stopWords
+}
+
+/* takes in invIndex map and writes it to JSONFILE */
+func saveJson(invIndex map[string][]string) {
+	// get JSON encoding of map
+	jsonData, err := json.MarshalIndent(invIndex, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+
+	fptr, err := os.Create(JSONFILE)
+	if err != nil {
+		panic(err)
+	}
+	defer fptr.Close()
+
+	_, err = fptr.Write(jsonData)
+	if err != nil {
+		panic(err)
+	}
 }
 
 /* stores each word from url into inverted index, updates visited */
