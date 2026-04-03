@@ -2,20 +2,23 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"time"
-	"net/http"
-	"golang.org/x/net/html"
+
+	"bufio"
 	"strings"
 	"unicode"
-	"bufio"
-	"net/url"
+
+	"golang.org/x/net/html"
 )
 
-const maxPages = 10000000
-const logFile = "visitedUrls.txt"
-const stopWordsFile = "stopWords.txt"
-
+const MAX_PAGES = 10000000
+const FIRST_MILESTONE = 100
+const MILESTONE_GROWTH_FCTR = 10
+const LOGFILE = "visitedUrls.txt"
+const STOPWORDSFILE = "stopWords.txt"
 
 /*
 	Questions:
@@ -25,49 +28,49 @@ const stopWordsFile = "stopWords.txt"
 	should we delete log file each time we run prog: yes
 */
 
-// TODO: make the visitedUrls check only happen once, maybe change it to a queuedUrls check
+func printTimeSinceStart(start time.Time) {
+	fmt.Println("Elapsed time:", time.Since(start))
+}
+
 func main() {
-	// store arguments as list
-	// NOTE: might want to change this to urlQueue
-	urls := os.Args[1:]
+	startTime := time.Now() // start timer
+	defer printTimeSinceStart(startTime)
 
-	// start timer
-	startTime := time.Now()
-
-	// initialize inverted index and visited url map
-	invIndex := make(map[string][]string)
-	visitedUrls := make(map[string]bool)
+	invIndex := make(map[string][]string) // init inverted index and stopwords
 	stopWords := getStopWords()
 
-	// iterate through urls, processing each
-	visited := 0
-	for len(urls) > 0 && visited < maxPages {
-		urls = processUrl(urls, invIndex, visitedUrls, &visited, stopWords)
+	// init LOGFILE
+	fptr, err := os.OpenFile(LOGFILE, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
 	}
+	defer fptr.Close()
+	log := bufio.NewWriter(fptr)
+	defer log.Flush()
+
+	// iterate through urls, processing each
+	// NOTE: may want to filter out duplicates from command line arguments
+	urls := os.Args[1:]
+	processUrls(urls, invIndex, stopWords, log, startTime)
 
 	// TODO: remove
-	//fmt.Println(invIndex)
+	// fmt.Println(invIndex)
 
 	// TODO: store invIndex in one JSON file
 	// TODO: print first 10 keywords in index
 	// TODO: record time needed to fetch and index content
 
-	// end timer
-	elapsedTime := time.Since(startTime)
-	fmt.Println("Elapsed time:", elapsedTime)
 }
 
-/* returns map of stop words from stopWordsFile */
+/* Returns map of stop words from STOPWORDSFILE. */
 func getStopWords() map[string]bool {
-	// open file with stop words
-	fptr, err := os.Open(stopWordsFile)
-	// TODO: decide if we should quit or just return nothing
-	if err != nil {
+
+	fptr, err := os.Open(STOPWORDSFILE) // open file with stop words
+	if err != nil {                     // TODO: decide if we should quit or just return nothing
 		panic(err)
 	}
 	defer fptr.Close()
 
-	// create map of stop words
 	stopWords := make(map[string]bool)
 	scanner := bufio.NewScanner(fptr)
 	for scanner.Scan() {
@@ -77,41 +80,58 @@ func getStopWords() map[string]bool {
 	return stopWords
 }
 
-/* stores each word from url into inverted index, updates visited, and returns new urls list*/
-func processUrl(urls []string, invIndex map[string][]string, visitedUrls map[string]bool, visited *int, stopWords map[string]bool) []string {
-	// pop first url
-	url := urls[0]
-	urls = urls[1:]
+/* stores each word from url into inverted index, updates visited */
+func processUrls(
+	urls []string,
+	invIndex map[string][]string,
+	stopWords map[string]bool,
+	log *bufio.Writer,
+	startTime time.Time,
+) {
 
-	// check if url already processed
-	if visitedUrls[url] {
-		return urls
+	// initialized queued urls map
+	queuedUrls := make(map[string]bool)
+	for _, url := range urls {
+		queuedUrls[url] = true
 	}
 
-	// mark url as visited
-	visitedUrls[url] = true
-	logUrl(url, visited)
+	visited := 0
+	nextMilestone := FIRST_MILESTONE
+	for len(urls) > 0 && visited < MAX_PAGES {
+		url := urls[0] // pop first url
+		urls = urls[1:]
 
-	// get response from GET request
-	resp, err := http.Get(url)
-	if err != nil {
-		panic(err)
+		visited++
+		logUrl(url, log)
+
+		//fmt.Println("Processing:", url) // TODO: remove
+
+		resp, err := http.Get(url)
+		if err != nil {
+			panic(err)
+		}
+		defer resp.Body.Close()
+
+		// get parse tree from html body
+		htmlNode, err := html.Parse(resp.Body)
+		if err != nil {
+			panic(err)
+		}
+
+		// processing data
+		processText(htmlNode, url, invIndex, stopWords)
+		processLinks(htmlNode, url, &urls, queuedUrls)
+
+		if visited == nextMilestone {
+			printTimeSinceStart(startTime)
+			nextMilestone *= MILESTONE_GROWTH_FCTR
+			// TODO: remove
+			fmt.Println("Visited:", visited)
+		}
+
+		// TODO: remove
+		// fmt.Println("Visited:", visited)
 	}
-	defer resp.Body.Close()
-	
-	// get parse tree from html body
-	htmlNode, err := html.Parse(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-
-	// process text from body
-	processText(htmlNode, url, invIndex, stopWords)
-
-	// process links
-	processLinks(htmlNode, url, &urls, visitedUrls)
-
-	return urls
 }
 
 // takes text from htmlNode and, after cleaning, adds the words to invIndex
@@ -140,7 +160,7 @@ func processText(htmlNode *html.Node, url string, invIndex map[string][]string, 
 }
 
 /* recursively finds links from htmlNode and adds them to urls */
-func processLinks(htmlNode *html.Node, url string, urls *[]string, visitedUrls map[string]bool) {
+func processLinks(htmlNode *html.Node, url string, urls *[]string, queuedUrls map[string]bool) {
 	// find each link and add it to urls to process
 	if htmlNode.Type == html.ElementNode && htmlNode.Data == "a" {
 		for _, attr := range htmlNode.Attr {
@@ -150,8 +170,9 @@ func processLinks(htmlNode *html.Node, url string, urls *[]string, visitedUrls m
 				link = resolveLink(url, link)
 
 				// add link to urls
-				if link != "" && !visitedUrls[link]{
+				if link != "" && !queuedUrls[link]{
 					*urls = append(*urls, link)
+					queuedUrls[link] = true
 				}
 			}
 		}
@@ -159,7 +180,7 @@ func processLinks(htmlNode *html.Node, url string, urls *[]string, visitedUrls m
 
 	// recursively process links
 	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
-		processLinks(childNode, url, urls, visitedUrls)
+		processLinks(childNode, url, urls, queuedUrls)
 	}
 }
 
@@ -206,20 +227,9 @@ func removePunct(str string) string {
 	return string(runes)
 }
 
-/* logs url to logFile and increments visited counter */
-// NOTE: maybe delete old log file on new crawler run
-func logUrl(url string, visited *int) {
-	*visited++
-
-	// open file
-	fptr, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		panic(err)
-	}
-	defer fptr.Close()
-
-	// write url to file
-	_, err = fptr.WriteString(url + "\n")
+/* logs url to LOGFILE */
+func logUrl(url string, log *bufio.Writer) {
+	_, err := log.WriteString(url + "\n")
 	if err != nil {
 		panic(err)
 	}
