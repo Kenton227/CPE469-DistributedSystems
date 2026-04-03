@@ -55,9 +55,6 @@ func main() {
 	urls := os.Args[1:]
 	processUrls(urls, invIndex, stopWords, log, startTime)
 
-	// TODO: remove
-	// fmt.Println(invIndex)
-
 	saveJson(invIndex)
 
 	// TODO: print first 10 keywords in index
@@ -82,6 +79,7 @@ func getStopWords() map[string]bool {
 }
 
 /* takes in invIndex map and writes it to JSONFILE */
+// NOTE: might want to make this function return err so main can deal with it
 func saveJson(invIndex map[string][]string) {
 	// get JSON encoding of map
 	jsonData, err := json.MarshalIndent(invIndex, "", "  ")
