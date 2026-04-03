@@ -58,8 +58,6 @@ func main() {
 
 	// TODO: store invIndex in one JSON file
 	// TODO: print first 10 keywords in index
-	// TODO: record time needed to fetch and index content
-
 }
 
 /* Returns map of stop words from STOPWORDSFILE. */
