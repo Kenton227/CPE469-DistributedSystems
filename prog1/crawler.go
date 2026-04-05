@@ -17,7 +17,7 @@ import (
 	"regexp"
 )
 
-const MAX_PAGES = 1000000
+const MAX_PAGES = 100
 const FIRST_MILESTONE = 100
 const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
@@ -75,16 +75,18 @@ func printFirstKeywords(index map[string][]string) {
 	}
 }
 
-/* Returns map of stop words from STOPWORDSFILE. */
+/* Returns map of stop words from STOPWORDSFILE or empty map with error on error. */
 func getStopWords() map[string]bool {
 
+	stopWords := make(map[string]bool)
 	fptr, err := os.Open(STOPWORDSFILE)
 	if err != nil {
-		panic(err)
+		fmt.Println("Warning:", err)
+		fmt.Println("Continuing with no filtered stop words...")
+		return stopWords
 	}
 	defer fptr.Close()
 
-	stopWords := make(map[string]bool)
 	scanner := bufio.NewScanner(fptr)
 	for scanner.Scan() {
 		stopWords[scanner.Text()] = true
