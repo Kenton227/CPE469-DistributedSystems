@@ -17,7 +17,7 @@ import (
 	"regexp"
 )
 
-const MAX_PAGES = 20
+const MAX_PAGES = 100000
 const FIRST_MILESTONE = 100
 const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
