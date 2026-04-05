@@ -5,15 +5,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
+	"slices"
 	"time"
 
 	"bufio"
 	"encoding/json"
 	"strings"
-	"unicode"
 
-	"golang.org/x/net/html"
+	"github.com/PuerkitoBio/goquery"
+
+	"regexp"
 )
 
 const MAX_PAGES = 1 ^ 6
@@ -22,14 +23,9 @@ const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
 const STOPWORDSFILE = "stopWords.txt"
 const JSONFILE = "invIndex.json"
+const TEXT_ELEMENTS = "title, h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote, pre, a"
 
-/*
-	Questions:
-	do we record timestamp for each url: record every factor of 10 timestamp
-	should we add to url log each time we process url or at the end: do buffered writes every 1000 maybe
-	same question but for storing map in JSON file: write JSON at end
-	should we delete log file each time we run prog: yes
-*/
+var nonAlphaNumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 func printTimeSinceStart(start time.Time) {
 	fmt.Println("Elapsed time:", time.Since(start))
@@ -60,13 +56,21 @@ func main() {
 }
 
 func printFirstKeywords(index map[string][]string) {
-	// Print first 10 keywords in index (sorted alphabetically)
+	// Print first 10 keywords in index (sorted by most related URLs)
 	keywords := make([]string, 0, len(index))
 	for k := range index {
 		keywords = append(keywords, k)
 	}
-	sort.Strings(keywords)
-	for i := range 10 {
+	slices.SortFunc(keywords, func(a, b string) int {
+		if len(index[a]) < len(index[b]) {
+			return -1
+		}
+		if len(index[a]) < len(index[b]) {
+			return 1
+		}
+		return 0
+	})
+	for i := range min(10, len(keywords)) {
 		fmt.Printf("\t%d: %s\n", i+1, keywords[i])
 	}
 }
@@ -74,8 +78,8 @@ func printFirstKeywords(index map[string][]string) {
 /* Returns map of stop words from STOPWORDSFILE. */
 func getStopWords() map[string]bool {
 
-	fptr, err := os.Open(STOPWORDSFILE) // open file with stop words
-	if err != nil {                     // TODO: decide if we should quit or just return nothing
+	fptr, err := os.Open(STOPWORDSFILE)
+	if err != nil {
 		panic(err)
 	}
 	defer fptr.Close()
@@ -90,7 +94,6 @@ func getStopWords() map[string]bool {
 }
 
 /* takes in invIndex map and writes it to JSONFILE */
-// NOTE: might want to make this function return err so main can deal with it
 func saveJson(invIndex map[string][]string) {
 	// get JSON encoding of map
 	jsonData, err := json.MarshalIndent(invIndex, "", "  ")
@@ -134,84 +137,70 @@ func processUrls(
 		visited++
 		logUrl(url, log)
 
-		//fmt.Println("Processing:", url) // TODO: remove
-
 		resp, err := http.Get(url)
 		if err != nil {
 			panic(err)
 		}
 		defer resp.Body.Close()
 
-		// get parse tree from html body
-		htmlNode, err := html.Parse(resp.Body)
-		if err != nil {
-			panic(err)
-		}
+		document, err := goquery.NewDocumentFromReader(resp.Body)
 
-		// processing data
-		processText(htmlNode, url, invIndex, stopWords)
-		processLinks(htmlNode, url, &urls, queuedUrls)
+		// Process Documents
+		processDocText(document, url, invIndex, stopWords)
+		processDocLinks(document, url, &urls, queuedUrls)
 
 		if visited == nextMilestone {
 			printTimeSinceStart(startTime)
 			nextMilestone *= MILESTONE_GROWTH_FCTR
-			// TODO: remove
-			fmt.Println("Visited:", visited)
 		}
 
-		// TODO: remove
-		// fmt.Println("Visited:", visited)
 	}
 }
 
-// takes text from htmlNode and, after cleaning, adds the words to invIndex
-func processText(htmlNode *html.Node, url string, invIndex map[string][]string, stopWords map[string]bool) {
-	// extract text if node is TextNode
-	if htmlNode.Type == html.TextNode {
-		// clean data string
-		cleanData := removePunct(strings.ToLower(htmlNode.Data))
+func extractTextFromDoc(doc *goquery.Document) []string {
+	doc.Find("script, style, noscript, svg").Remove()
 
-		// convert data string to word list
-		words := strings.Fields(cleanData)
+	var tokens []string
 
-		// store words in invIndex
-		for _, word := range words {
-			// dont include stop words
-			if !stopWords[word] {
-				addToInvIndex(word, url, invIndex)
+	doc.Find(TEXT_ELEMENTS).Each(
+		func(i int, s *goquery.Selection) {
+			text := strings.TrimSpace(s.Text())
+			cleanText := cleanText(text)
+			for _, token := range strings.Fields(cleanText) {
+				if token == "" {
+					continue
+				}
+				tokens = append(tokens, token)
 			}
-		}
-	}
+		},
+	)
 
-	// recursively process children
-	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
-		processText(childNode, url, invIndex, stopWords)
+	return tokens
+}
+
+func processDocText(doc *goquery.Document, url string, invIndex map[string][]string, stopWords map[string]bool) {
+	words := extractTextFromDoc(doc)
+
+	for _, word := range words {
+		if !stopWords[word] {
+			addToInvIndex(word, url, invIndex)
+		}
 	}
 }
 
-/* recursively finds links from htmlNode and adds them to urls */
-func processLinks(htmlNode *html.Node, url string, urls *[]string, queuedUrls map[string]bool) {
-	// find each link and add it to urls to process
-	if htmlNode.Type == html.ElementNode && htmlNode.Data == "a" {
-		for _, attr := range htmlNode.Attr {
-			if attr.Key == "href" {
-				// get absolute url
-				link := strings.TrimSpace(attr.Val)
-				link = resolveLink(url, link)
-
-				// add link to urls
-				if link != "" && !queuedUrls[link] {
+func processDocLinks(doc *goquery.Document, url string, urls *[]string, queuedUrls map[string]bool) {
+	doc.Find("a[href]").Each(
+		func(i int, s *goquery.Selection) {
+			link, exists := s.Attr("href")
+			if exists {
+				link = resolveLink(url, strings.TrimSpace(link)) // get absolute url
+				if link != "" && !queuedUrls[link] {             // add link to urls
 					*urls = append(*urls, link)
 					queuedUrls[link] = true
 				}
 			}
-		}
-	}
-
-	// recursively process links
-	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
-		processLinks(childNode, url, urls, queuedUrls)
-	}
+		},
+	)
 }
 
 /* takes in a baseUrl and a link and returns the absolute path of the link */
@@ -242,18 +231,9 @@ func addToInvIndex(word string, url string, invIndex map[string][]string) {
 	invIndex[word] = append(valueUrls, url)
 }
 
-/* returns inputted string with punctuation removed */
-func removePunct(str string) string {
-	runes := []rune{}
-
-	// append character if not punctuation
-	for _, run := range str {
-		if !unicode.IsPunct(run) {
-			runes = append(runes, run)
-		}
-	}
-
-	return string(runes)
+/* Replaces non-alphanumeric characters with spaces */
+func cleanText(s string) string {
+	return nonAlphaNumeric.ReplaceAllString(strings.ToLower(s), " ")
 }
 
 /* logs url to LOGFILE */
