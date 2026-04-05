@@ -5,12 +5,12 @@
 ```
 > go run ./crawler.go <complete_urls> ...
 ```
-**Optional Files**
+**Optional Files**:
 - `stopWords.txt` - stop words to be filtered out separated by new lines
 **Output Files**:
 - `invIndex.json` - Stores the inverted index mapping keywords to associated URLs
 - `visitedUrls.txt` - Stores all visited URLs
-*Example usage*
+*Example usage*:
 ```
 > go run ./crawler.go https://books.toscrape.com/ https://calpoly.edu
 ```
