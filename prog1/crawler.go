@@ -63,15 +63,15 @@ func printFirstKeywords(index map[string][]string) {
 	}
 	slices.SortFunc(keywords, func(a, b string) int {
 		if len(index[a]) < len(index[b]) {
-			return -1
-		}
-		if len(index[a]) < len(index[b]) {
 			return 1
+		}
+		if len(index[a]) > len(index[b]) {
+			return -1
 		}
 		return 0
 	})
 	for i := range min(10, len(keywords)) {
-		fmt.Printf("\t%d: %s\n", i+1, keywords[i])
+		fmt.Printf("\t%d: %s (%d entries)\n", i+1, keywords[i], len(index[keywords[i]]))
 	}
 }
 
