@@ -3,28 +3,31 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
 	"bufio"
 	"strings"
 	"unicode"
+	"encoding/json"
 
 	"golang.org/x/net/html"
 )
 
-const MAX_PAGES = 10 ^ 7
+const MAX_PAGES = 1000000
 const FIRST_MILESTONE = 100
 const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
 const STOPWORDSFILE = "stopWords.txt"
+const JSONFILE = "invIndex.json"
 
 /*
 	Questions:
-	do we record timestamp for each url
-	should we add to url log each time we process url or at the end
-	same question but for storing map in JSON file
-	should we delete log file each time we run prog
+	do we record timestamp for each url: record every factor of 10 timestamp
+	should we add to url log each time we process url or at the end: do buffered writes every 1000 maybe
+	same question but for storing map in JSON file: write JSON at end
+	should we delete log file each time we run prog: yes
 */
 
 func printTimeSinceStart(start time.Time) {
@@ -32,7 +35,6 @@ func printTimeSinceStart(start time.Time) {
 }
 
 func main() {
-
 	startTime := time.Now() // start timer
 	defer printTimeSinceStart(startTime)
 
@@ -49,16 +51,13 @@ func main() {
 	defer log.Flush()
 
 	// iterate through urls, processing each
+	// NOTE: may want to filter out duplicates from command line arguments
 	urls := os.Args[1:]
 	processUrls(urls, invIndex, stopWords, log, startTime)
 
-	// TODO: remove
-	// fmt.Println(invIndex)
+	saveJson(invIndex)
 
-	// TODO: store invIndex in one JSON file
 	// TODO: print first 10 keywords in index
-	// TODO: record time needed to fetch and index content
-
 }
 
 /* Returns map of stop words from STOPWORDSFILE. */
@@ -79,6 +78,27 @@ func getStopWords() map[string]bool {
 	return stopWords
 }
 
+/* takes in invIndex map and writes it to JSONFILE */
+// NOTE: might want to make this function return err so main can deal with it
+func saveJson(invIndex map[string][]string) {
+	// get JSON encoding of map
+	jsonData, err := json.MarshalIndent(invIndex, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+
+	fptr, err := os.Create(JSONFILE)
+	if err != nil {
+		panic(err)
+	}
+	defer fptr.Close()
+
+	_, err = fptr.Write(jsonData)
+	if err != nil {
+		panic(err)
+	}
+}
+
 /* stores each word from url into inverted index, updates visited */
 func processUrls(
 	urls []string,
@@ -88,23 +108,22 @@ func processUrls(
 	startTime time.Time,
 ) {
 
-	visitedUrls := make(map[string]bool)
+	// initialized queued urls map
+	queuedUrls := make(map[string]bool)
+	for _, url := range urls {
+		queuedUrls[url] = true
+	}
+
 	visited := 0
 	nextMilestone := FIRST_MILESTONE
 	for len(urls) > 0 && visited < MAX_PAGES {
 		url := urls[0] // pop first url
 		urls = urls[1:]
 
-		// check if url already processed
-		if visitedUrls[url] {
-			continue
-		}
-
-		visitedUrls[url] = true
 		visited++
 		logUrl(url, log)
 
-		fmt.Println("Processing:", url) // TODO: remove
+		//fmt.Println("Processing:", url) // TODO: remove
 
 		resp, err := http.Get(url)
 		if err != nil {
@@ -118,19 +137,23 @@ func processUrls(
 			panic(err)
 		}
 
+		// processing data
 		processText(htmlNode, url, invIndex, stopWords)
-
-		// TODO: process links
+		processLinks(htmlNode, url, &urls, queuedUrls)
 
 		if visited == nextMilestone {
 			printTimeSinceStart(startTime)
 			nextMilestone *= MILESTONE_GROWTH_FCTR
+			// TODO: remove
+			fmt.Println("Visited:", visited)
 		}
+
+		// TODO: remove
+		// fmt.Println("Visited:", visited)
 	}
-	fmt.Println("Visited:", visited)
 }
 
-// TODO: add comment
+// takes text from htmlNode and, after cleaning, adds the words to invIndex
 func processText(htmlNode *html.Node, url string, invIndex map[string][]string, stopWords map[string]bool) {
 	// extract text if node is TextNode
 	if htmlNode.Type == html.TextNode {
@@ -153,6 +176,45 @@ func processText(htmlNode *html.Node, url string, invIndex map[string][]string, 
 	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
 		processText(childNode, url, invIndex, stopWords)
 	}
+}
+
+/* recursively finds links from htmlNode and adds them to urls */
+func processLinks(htmlNode *html.Node, url string, urls *[]string, queuedUrls map[string]bool) {
+	// find each link and add it to urls to process
+	if htmlNode.Type == html.ElementNode && htmlNode.Data == "a" {
+		for _, attr := range htmlNode.Attr {
+			if attr.Key == "href" {
+				// get absolute url
+				link := strings.TrimSpace(attr.Val)
+				link = resolveLink(url, link)
+
+				// add link to urls
+				if link != "" && !queuedUrls[link]{
+					*urls = append(*urls, link)
+					queuedUrls[link] = true
+				}
+			}
+		}
+	}
+
+	// recursively process links
+	for childNode := htmlNode.FirstChild; childNode != nil; childNode = childNode.NextSibling {
+		processLinks(childNode, url, urls, queuedUrls)
+	}
+}
+
+/* takes in a baseUrl and a link and returns the absolute path of the link */
+func resolveLink(baseUrl string, link string) string {
+	parsedBase, err := url.Parse(baseUrl)
+	if err != nil {
+		return ""
+	}
+	parsedLink, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+
+	return parsedBase.ResolveReference(parsedLink).String()
 }
 
 /* adds word : url to invIndex while avoiding duplicate urls */
