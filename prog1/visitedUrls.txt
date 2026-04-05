@@ -1,7 +1,0 @@
-https://google.com
-https://mail.google.com/mail/&ogbl
-https://www.google.com/imghp?hl=en&ogbl
-https://www.google.com/intl/en/about/products
-https://accounts.google.com/ServiceLogin?hl=en&passive=true&continue=https://www.google.com/&ec=GAZAmgQ
-https://google.com/advanced_search?hl=en&authuser=0
-https://google.com/intl/en/ads/
