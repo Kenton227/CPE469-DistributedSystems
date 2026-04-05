@@ -5,17 +5,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"time"
 
 	"bufio"
+	"encoding/json"
 	"strings"
 	"unicode"
-	"encoding/json"
 
 	"golang.org/x/net/html"
 )
 
-const MAX_PAGES = 1000000
+const MAX_PAGES = 1 ^ 6
 const FIRST_MILESTONE = 100
 const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
@@ -50,14 +51,24 @@ func main() {
 	log := bufio.NewWriter(fptr)
 	defer log.Flush()
 
-	// iterate through urls, processing each
-	// NOTE: may want to filter out duplicates from command line arguments
 	urls := os.Args[1:]
 	processUrls(urls, invIndex, stopWords, log, startTime)
 
 	saveJson(invIndex)
 
-	// TODO: print first 10 keywords in index
+	printFirstKeywords(invIndex)
+}
+
+func printFirstKeywords(index map[string][]string) {
+	// Print first 10 keywords in index (sorted alphabetically)
+	keywords := make([]string, 0, len(index))
+	for k := range index {
+		keywords = append(keywords, k)
+	}
+	sort.Strings(keywords)
+	for i := range 10 {
+		fmt.Printf("\t%d: %s\n", i+1, keywords[i])
+	}
 }
 
 /* Returns map of stop words from STOPWORDSFILE. */
@@ -189,7 +200,7 @@ func processLinks(htmlNode *html.Node, url string, urls *[]string, queuedUrls ma
 				link = resolveLink(url, link)
 
 				// add link to urls
-				if link != "" && !queuedUrls[link]{
+				if link != "" && !queuedUrls[link] {
 					*urls = append(*urls, link)
 					queuedUrls[link] = true
 				}
@@ -224,7 +235,6 @@ func addToInvIndex(word string, url string, invIndex map[string][]string) {
 	for _, valueUrl := range valueUrls {
 		if valueUrl == url {
 			return
-			fmt.Println("DUPLICATE URL")
 		}
 	}
 
