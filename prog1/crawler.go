@@ -17,7 +17,7 @@ import (
 	"regexp"
 )
 
-const MAX_PAGES = 1 ^ 6
+const MAX_PAGES = 1000000
 const FIRST_MILESTONE = 100
 const MILESTONE_GROWTH_FCTR = 10
 const LOGFILE = "visitedUrls.txt"
@@ -122,7 +122,7 @@ func processUrls(
 	startTime time.Time,
 ) {
 
-	// initialized queued urls map
+	/*Stores all URLs ever enqueued*/
 	queuedUrls := make(map[string]bool)
 	for _, url := range urls {
 		queuedUrls[url] = true
@@ -139,17 +139,22 @@ func processUrls(
 
 		resp, err := http.Get(url)
 		if err != nil {
-			panic(err)
+			fmt.Println("Request failed:", url, "-", err)
+			continue
 		}
 		defer resp.Body.Close()
 
 		document, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			continue
+		}
 
 		// Process Documents
 		processDocText(document, url, invIndex, stopWords)
 		processDocLinks(document, url, &urls, queuedUrls)
 
 		if visited == nextMilestone {
+			fmt.Printf("Visited %d pages!\n", visited)
 			printTimeSinceStart(startTime)
 			nextMilestone *= MILESTONE_GROWTH_FCTR
 		}
@@ -188,13 +193,21 @@ func processDocText(doc *goquery.Document, url string, invIndex map[string][]str
 	}
 }
 
+func isValidHTTP(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
 func processDocLinks(doc *goquery.Document, url string, urls *[]string, queuedUrls map[string]bool) {
 	doc.Find("a[href]").Each(
 		func(i int, s *goquery.Selection) {
 			link, exists := s.Attr("href")
 			if exists {
-				link = resolveLink(url, strings.TrimSpace(link)) // get absolute url
-				if link != "" && !queuedUrls[link] {             // add link to urls
+				link = resolveLink(url, strings.TrimSpace(link))          // get absolute url
+				if link != "" && isValidHTTP(link) && !queuedUrls[link] { // add link to urls
 					*urls = append(*urls, link)
 					queuedUrls[link] = true
 				}
