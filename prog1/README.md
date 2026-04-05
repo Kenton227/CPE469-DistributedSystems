@@ -14,3 +14,5 @@
 ```
 > go run ./crawler.go https://books.toscrape.com/ https://calpoly.edu
 ```
+## Notes:
+- the default max number of pages to crawl is 100, set by the `MAX_PAGES` global constant
