@@ -132,21 +132,21 @@ func processUrls(
 
 	visited := 0
 	nextMilestone := FIRST_MILESTONE
-	for len(urls) > 0 && visited < MAX_PAGES {
-		url := urls[0] // pop first url
-		urls = urls[1:]
+	client := &http.Client{Timeout: 10 * time.Second}
+	for i := 0; i < len(urls) && visited < MAX_PAGES; i++ {
+		url := urls[i]
 
 		visited++
 		logUrl(url, log)
 
-		resp, err := http.Get(url)
+		resp, err := client.Get(url)
 		if err != nil {
-			fmt.Println("Request failed:", url, "-", err)
+			//fmt.Println("Request failed:", url, "-", err)
 			continue
 		}
-		defer resp.Body.Close()
 
 		document, err := goquery.NewDocumentFromReader(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			continue
 		}
