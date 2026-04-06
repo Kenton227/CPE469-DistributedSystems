@@ -234,16 +234,8 @@ func resolveLink(baseUrl string, link string) string {
 
 /* adds word : url to invIndex while avoiding duplicate urls */
 func addToInvIndex(word string, url string, invIndex map[string][]string) {
-	// check if duplicate url
-	valueUrls := invIndex[word]
-	for _, valueUrl := range valueUrls {
-		if valueUrl == url {
-			return
-		}
-	}
-
 	// add url to invIndex
-	invIndex[word] = append(valueUrls, url)
+	invIndex[word] = append(invIndex[word], url)
 }
 
 /* Replaces non-alphanumeric characters with spaces */
