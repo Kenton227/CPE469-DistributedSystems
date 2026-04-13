@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"strconv"
+	"errors"
+	"io"
 	"encoding/json"
 	"net/rpc"
 	"prog2/common"
@@ -22,20 +24,33 @@ func main() {
 
 		switch task.Type {
 		case common.Map:
-			fmt.Println("map")
-			doMapTask(task)
-			reportTaskDone(task)
+			err := doMapTask(task)
+			if err != nil {
+				fmt.Println("doMapTask: ", err)
+				return
+			}
+			err = reportTaskDone(task)
+			if err != nil {
+				fmt.Println("reportTaskDone: ", err)
+				return
+			}
 		case common.Reduce:
-			fmt.Println("reduce")
-			//doReduceTask(task)
-			//reportTaskDone(task)
-			break
+			err := doReduceTask(task)
+			if err != nil {
+				fmt.Println("doReduceTask: ", err)
+				return
+			}
+			err = reportTaskDone(task)
+			if err != nil {
+				fmt.Println("reportTaskDone: ", err)
+				return
+			}
 		case common.Wait:
-			fmt.Println("wait")
+			fmt.Println("waiting for task...")
 			time.Sleep(time.Second)
 		case common.Done:
-			fmt.Println("done")
-			break
+			fmt.Println("nothing to do, exiting...")
+			return
 		}
 	}
 }
@@ -48,6 +63,8 @@ func idxHash(word string) int {
 }
 
 func doMapTask(mapTask *common.RequestTaskReply) error {
+	fmt.Println("starting map task ", mapTask.Id)
+
 	// read file
 	data, err := os.ReadFile(mapTask.Filename)
 	if err != nil {
@@ -89,12 +106,81 @@ func doMapTask(mapTask *common.RequestTaskReply) error {
 
 		for key, val := range maps[i] {
 			keyVal := common.KeyValue{key, strconv.Itoa(val)}
-			enc.Encode(keyVal)
+			err = enc.Encode(keyVal)
+			if err != nil {
+				fptr.Close()
+				return err
+			}
 		}
 
 		fptr.Close()
 	}
 
+	return nil
+}
+
+func doReduceTask(reduceTask *common.RequestTaskReply) error {
+	fmt.Println("starting reduce task ", reduceTask.Id)
+
+	// read intermediate files for this reduce task
+	reduceMap := make(map[string]int)
+
+	for i := 0; i < reduceTask.MNum; i++ {
+		filename := fmt.Sprintf("intermediates/intermediate-%d-%d.json", i, reduceTask.Id)
+
+		fptr, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+
+		dec := json.NewDecoder(fptr)
+
+		// read stream of keyValue pairs and add to reduceMap
+		for {
+			keyVal := common.KeyValue{}
+			err = dec.Decode(&keyVal)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				fptr.Close()
+				return err
+			}
+
+			val, err := strconv.Atoi(keyVal.Value)
+			if err != nil {
+				fptr.Close()
+				return err
+			}
+			reduceMap[keyVal.Key] += val
+		}
+
+		fptr.Close()
+	}
+
+	// write output file for this reduce task
+	outputFilename := fmt.Sprintf("mr-outs/mr-out-%d.txt", reduceTask.Id)
+
+	err := os.MkdirAll("mr-outs", 0755)
+	if err != nil {
+		return err
+	}
+
+	fptr, err := os.Create(outputFilename)
+	if err != nil {
+		return err
+	}
+
+	for word, count := range reduceMap {
+		line := fmt.Sprintf("%s: %d\n", word, count)
+		_, err = fptr.WriteString(line)
+		if err != nil {
+			fptr.Close()
+			return err
+		}
+	}
+
+	fptr.Close()
 	return nil
 }
 

@@ -19,6 +19,7 @@ type RequestTaskReply struct {
 	Type TaskType
 	Id int
 	Filename string
+	MNum int
 	RNum int
 }
 
