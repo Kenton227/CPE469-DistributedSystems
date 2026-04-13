@@ -1,15 +1,14 @@
 package main
 
 import (
-	"os"
-	"strconv"
 	"fmt"
+	"os"
 	"prog2/coordinator"
+	"strconv"
+	"time"
 )
 
 func main() {
-	// NOTE: maybe make the driver start the workers as well (or just make it execute `go run coord.go` with params
-
 	// get params for coordinator (M, R, inputFile)
 	if len(os.Args) != 4 {
 		fmt.Println("error: invalid command format:")
@@ -31,6 +30,15 @@ func main() {
 
 	inputFile := os.Args[3]
 
-	// call coordinator
-	coordinator.StartCoordinator(M, R, inputFile)
+	coord, err := coordinator.StartCoordinator(M, R, inputFile)
+	if err != nil {
+		fmt.Println("coordinator.StartCoordinator: ", err)
+		return
+	}
+
+	for !coord.Done() {
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	fmt.Println("map reduce completed")
 }
