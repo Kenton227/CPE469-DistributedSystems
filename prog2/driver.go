@@ -4,10 +4,11 @@ import (
 	"os"
 	"strconv"
 	"fmt"
+	"prog2/coordinator"
 )
 
 func main() {
-	
+	// NOTE: maybe make the driver start the workers as well (or just make it execute `go run coord.go` with params
 
 	// get params for coordinator (M, R, inputFile)
 	if len(os.Args) != 4 {
@@ -31,5 +32,5 @@ func main() {
 	inputFile := os.Args[3]
 
 	// call coordinator
-	test(M, R, inputFile)
+	coordinator.StartCoordinator(M, R, inputFile)
 }
