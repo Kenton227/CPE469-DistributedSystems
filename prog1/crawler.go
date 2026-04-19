@@ -75,16 +75,18 @@ func printFirstKeywords(index map[string][]string) {
 	}
 }
 
-/* Returns map of stop words from STOPWORDSFILE. */
+/* Returns map of stop words from STOPWORDSFILE or empty map with error on error. */
 func getStopWords() map[string]bool {
 
+	stopWords := make(map[string]bool)
 	fptr, err := os.Open(STOPWORDSFILE)
 	if err != nil {
-		panic(err)
+		fmt.Println("Warning:", err)
+		fmt.Println("Continuing with no filtered stop words...")
+		return stopWords
 	}
 	defer fptr.Close()
 
-	stopWords := make(map[string]bool)
 	scanner := bufio.NewScanner(fptr)
 	for scanner.Scan() {
 		stopWords[scanner.Text()] = true
@@ -130,21 +132,21 @@ func processUrls(
 
 	visited := 0
 	nextMilestone := FIRST_MILESTONE
-	for len(urls) > 0 && visited < MAX_PAGES {
-		url := urls[0] // pop first url
-		urls = urls[1:]
+	client := &http.Client{Timeout: 10 * time.Second}
+	for i := 0; i < len(urls) && visited < MAX_PAGES; i++ {
+		url := urls[i]
 
 		visited++
 		logUrl(url, log)
 
-		resp, err := http.Get(url)
+		resp, err := client.Get(url)
 		if err != nil {
-			fmt.Println("Request failed:", url, "-", err)
+			//fmt.Println("Request failed:", url, "-", err)
 			continue
 		}
-		defer resp.Body.Close()
 
 		document, err := goquery.NewDocumentFromReader(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			continue
 		}
@@ -232,16 +234,8 @@ func resolveLink(baseUrl string, link string) string {
 
 /* adds word : url to invIndex while avoiding duplicate urls */
 func addToInvIndex(word string, url string, invIndex map[string][]string) {
-	// check if duplicate url
-	valueUrls := invIndex[word]
-	for _, valueUrl := range valueUrls {
-		if valueUrl == url {
-			return
-		}
-	}
-
 	// add url to invIndex
-	invIndex[word] = append(valueUrls, url)
+	invIndex[word] = append(invIndex[word], url)
 }
 
 /* Replaces non-alphanumeric characters with spaces */
