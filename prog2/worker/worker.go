@@ -1,17 +1,17 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/fnv"
+	"io"
+	"net/rpc"
 	"os"
+	"prog2/common"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
-	"errors"
-	"io"
-	"encoding/json"
-	"net/rpc"
-	"prog2/common"
-	"hash/fnv"
 )
 
 func main() {
@@ -76,7 +76,7 @@ func doMapTask(mapTask *common.RequestTaskReply) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// split data by spaces
 	words := strings.Fields(string(data))
 
@@ -88,8 +88,8 @@ func doMapTask(mapTask *common.RequestTaskReply) error {
 
 	// add words to their respective map
 	for _, word := range words {
-	    idx := idxHash(word) % mapTask.RNum
-	    maps[idx][word]++
+		idx := idxHash(word) % mapTask.RNum
+		maps[idx][word]++
 	}
 
 	// write intermediate files
