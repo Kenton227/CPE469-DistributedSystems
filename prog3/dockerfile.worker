@@ -1,0 +1,11 @@
+FROM golang:1.26
+
+WORKDIR /app
+
+COPY .. .
+
+WORKDIR /app/worker
+
+RUN go build -o worker
+
+ENTRYPOINT [ "./worker" ]
