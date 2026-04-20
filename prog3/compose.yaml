@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: dockerfile.coordinator
+    command: ["./coordinator", "${M}", "${R}", "${INPUT_FILE}"]
     container_name: rpc-coordinator
     ports:
       - "9000:1234"

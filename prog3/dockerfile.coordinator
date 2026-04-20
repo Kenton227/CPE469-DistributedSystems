@@ -8,4 +8,3 @@ WORKDIR /app/coordinator
 
 RUN go build -o coordinator
 
-CMD [ "./coordinator", "14", "7", "/app/words.txt"]

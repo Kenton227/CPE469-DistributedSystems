@@ -14,8 +14,9 @@ import (
 	"time"
 )
 
-const TIMEOUT_LIMIT = 10 * time.Second
+const TIMEOUT_LIMIT = time.Minute
 const OUTPUT_DIR = "/app/output"
+const START_TIMEOUT = 30 * time.Second
 
 type WorkerRPC struct {
 	mutex sync.Mutex
@@ -29,25 +30,29 @@ var workerState = &WorkerRPC{
 }
 
 func main() {
+
 	workerAddr, err := startWorkerRPCServer()
 	if err != nil {
 		fmt.Println("startWorkerRPCServer:", err)
 		return
 	}
 
-	coordClient, err := rpc.Dial("tcp", "coordinator:1234")
-	if err != nil {
-		fmt.Println("rpc.Dial:", err)
-		return
+	var coordClient *rpc.Client
+	startTime := time.Now()
+	for time.Since(startTime) < START_TIMEOUT {
+		coordClient, err = rpc.Dial("tcp", "coordinator:1234")
+		if err == nil {
+			fmt.Println("rpc.Dial:", err)
+			break
+		}
 	}
+
 	defer coordClient.Close()
 
 	if err := registerWorker(coordClient, workerAddr); err != nil {
 		fmt.Println("registerWorker:", err)
 		return
 	}
-
-	startTime := time.Now()
 
 	for {
 		if time.Since(startTime) > TIMEOUT_LIMIT {

@@ -60,11 +60,13 @@ func validArgs(args []string) (int, int, string) {
 
 	M, err := strconv.Atoi(args[1])
 	if err != nil {
+		fmt.Println(args[1])
 		panic("error parsing M value")
 	}
 
 	R, err := strconv.Atoi(args[2])
 	if err != nil {
+		fmt.Println(args[2])
 		panic("error parsing R value")
 	}
 
