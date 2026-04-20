@@ -2,10 +2,10 @@ FROM golang:1.26
 
 WORKDIR /app
 
-COPY .. .
+COPY . .
 
 WORKDIR /app/coordinator
 
 RUN go build -o coordinator
 
-CMD [ "./coordinator" ]
+CMD [ "./coordinator", "14", "7", "/app/words.txt"]
