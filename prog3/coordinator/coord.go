@@ -1,18 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"prog3/common"
+	"strconv"
 	"sync"
 	"time"
 )
 
 const taskTimeout = 10 * time.Second
 
-// enum for task status
 type status int
 
 const (
@@ -25,10 +27,12 @@ type task struct {
 	id        int
 	status    status
 	startTime time.Time
+
 	filename  string
+	startByte int
+	endByte   int
 }
 
-// enum for coordinator phases
 type phase int
 
 const (
@@ -44,6 +48,71 @@ type Coordinator struct {
 	reduceTasks []task
 	mNum        int
 	rNum        int
+
+	workers  map[string]bool // registered workers
+	mapOwner map[int]string  // map task id -> worker addr
+}
+
+func validArgs(args []string) (int, int, string) {
+	if len(args) < 4 {
+		panic("usage: coordinator <M> <R> <inputFile>")
+	}
+
+	M, err := strconv.Atoi(args[1])
+	if err != nil {
+		fmt.Println(args[1])
+		panic("error parsing M value")
+	}
+
+	R, err := strconv.Atoi(args[2])
+	if err != nil {
+		fmt.Println(args[2])
+		panic("error parsing R value")
+	}
+
+	inputFile := args[3]
+
+	absPath, err := filepath.Abs(inputFile)
+	if err != nil {
+		panic("failed to resolve input file path")
+	}
+
+	_, err = os.Stat(absPath)
+	if err == nil {
+		fmt.Println("File exists")
+	} else if errors.Is(err, os.ErrNotExist) {
+		panic("File does not exist")
+	} else {
+		panic("Error checking file")
+	}
+
+	return M, R, absPath
+}
+
+func main() {
+	M, R, inputFile := validArgs(os.Args)
+
+	fmt.Println("Listening")
+
+	coord, err := StartCoordinator(M, R, inputFile)
+	if err != nil {
+		fmt.Println("coordinator.StartCoordinator: ", err)
+		return
+	}
+
+	for !coord.Done() {
+		time.Sleep(500 * time.Millisecond)
+	}
+	fmt.Println("Completed!")
+}
+
+func (coord *Coordinator) RegisterWorker(args *common.RegisterWorkerArgs, reply *common.RegisterWorkerReply) error {
+	coord.mutex.Lock()
+	defer coord.mutex.Unlock()
+
+	coord.workers[args.WorkerAddr] = true
+	fmt.Println("registered worker:", args.WorkerAddr)
+	return nil
 }
 
 func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *common.RequestTaskReply) error {
@@ -52,15 +121,23 @@ func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *commo
 
 	now := time.Now()
 
+	if args.WorkerAddr != "" {
+		coord.workers[args.WorkerAddr] = true
+	}
+
 	if coord.phase == mapPhase {
 		allCompleted := true
+
 		for id, mapTask := range coord.mapTasks {
 			if mapTask.status == idle || (mapTask.status == inProgress && now.Sub(mapTask.startTime) > taskTimeout) {
 				reply.Type = common.Map
 				reply.Id = id
 				reply.Filename = mapTask.filename
+				reply.StartByte = mapTask.startByte
+				reply.EndByte = mapTask.endByte
 				reply.RNum = coord.rNum
 				reply.MNum = coord.mNum
+
 				coord.mapTasks[id].status = inProgress
 				coord.mapTasks[id].startTime = now
 				return nil
@@ -80,12 +157,18 @@ func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *commo
 
 	if coord.phase == reducePhase {
 		allCompleted := true
+
 		for id, reduceTask := range coord.reduceTasks {
 			if reduceTask.status == idle || (reduceTask.status == inProgress && now.Sub(reduceTask.startTime) > taskTimeout) {
 				reply.Type = common.Reduce
 				reply.Id = id
 				reply.MNum = coord.mNum
 				reply.RNum = coord.rNum
+				reply.MapOwners = make(map[int]string, len(coord.mapOwner))
+				for k, v := range coord.mapOwner {
+					reply.MapOwners[k] = v
+				}
+
 				coord.reduceTasks[id].status = inProgress
 				coord.reduceTasks[id].startTime = now
 				return nil
@@ -112,11 +195,14 @@ func (coord *Coordinator) ReportTask(args *common.ReportTaskArgs, reply *common.
 	coord.mutex.Lock()
 	defer coord.mutex.Unlock()
 
-	if args.Type == common.Map {
+	switch args.Type {
+	case common.Map:
 		coord.mapTasks[args.TaskID].status = done
-	} else if args.Type == common.Reduce {
+		coord.mapOwner[args.TaskID] = args.WorkerAddr
+	case common.Reduce:
 		coord.reduceTasks[args.TaskID].status = done
 	}
+
 	return nil
 }
 
@@ -124,51 +210,40 @@ func isSplitBoundary(b byte) bool {
 	return b == ' ' || b == '\n' || b == '\t' || b == '\r'
 }
 
+// create logical byte-range splits only; do not write split files
 func makeSplits(splitNum int, inputFile string, coord *Coordinator) error {
 	data, err := os.ReadFile(inputFile)
 	if err != nil {
-		fmt.Println("ReadFile: ", err)
+		fmt.Println("ReadFile:", err)
 		return err
 	}
 
 	fileSize := len(data)
-
-	// use MkdirAll so it doesnt fail if splits/ already exists
-	err = os.MkdirAll("splits", 0755)
-	if err != nil {
-		return err
-	}
-
 	startByte := 0
+
 	for i := 0; i < splitNum; i++ {
-		// find a starting byte for this split
 		for startByte < fileSize && isSplitBoundary(data[startByte]) {
 			startByte++
 		}
 
-		// find the ending byte for this split
 		endByte := fileSize
 		if i != splitNum-1 {
 			endByte = ((i + 1) * fileSize) / splitNum
 			if endByte < startByte {
 				endByte = startByte
 			}
-
 			for endByte < fileSize && !isSplitBoundary(data[endByte]) {
 				endByte++
 			}
 		}
 
-		splitData := data[startByte:endByte]
-
-		filename := fmt.Sprintf("splits/split-%d", i)
-		err := os.WriteFile(filename, splitData, 0644)
-		if err != nil {
-			return err
+		mapTask := task{
+			id:        i,
+			status:    idle,
+			filename:  inputFile,
+			startByte: startByte,
+			endByte:   endByte,
 		}
-
-		// add task to coord
-		mapTask := task{id: i, status: idle, filename: filename}
 		coord.mapTasks = append(coord.mapTasks, mapTask)
 
 		startByte = endByte
@@ -178,50 +253,49 @@ func makeSplits(splitNum int, inputFile string, coord *Coordinator) error {
 }
 
 func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
-	// initialize coordinator
-	coord := &Coordinator{}
-	rpc.Register(coord)
-	coord.phase = mapPhase
-	coord.mNum = M
-	coord.rNum = R
+	coord := &Coordinator{
+		phase:    mapPhase,
+		mNum:     M,
+		rNum:     R,
+		workers:  make(map[string]bool),
+		mapOwner: make(map[int]string),
+	}
 
-	// write splits to files at `splits/split-i` and map tasks
+	if err := rpc.RegisterName("Coordinator", coord); err != nil {
+		return nil, err
+	}
+
 	err := makeSplits(M, inputFile, coord)
 	if err != nil {
 		return nil, err
 	}
 
-	// add reduce tasks
 	for i := 0; i < R; i++ {
 		reduceTask := task{id: i, status: idle}
 		coord.reduceTasks = append(coord.reduceTasks, reduceTask)
 	}
 
-	// listen for rpc calls from workers
 	go rpcListen(coord)
 
 	return coord, nil
 }
 
 func rpcListen(coord *Coordinator) {
-	// open port to listen on
-	listener, err := net.Listen("tcp", "localhost:7777")
+	listener, err := net.Listen("tcp", ":1234")
 	if err != nil {
-		fmt.Println("net.Listen: ", err)
+		fmt.Println("net.Listen:", err)
 		return
 	}
 	defer listener.Close()
-	fmt.Println("Coordinator is ready and waiting for connections on port 7777")
 
-	// listen loop
+	fmt.Println("Coordinator is ready and waiting for connections on port 1234")
+
 	for !coord.Done() {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("connection error: ", err)
+			fmt.Println("connection error:", err)
 			continue
 		}
-
-		// create thread to serve request
 		go rpc.ServeConn(conn)
 	}
 }

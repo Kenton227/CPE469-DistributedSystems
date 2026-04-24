@@ -2,7 +2,7 @@ FROM golang:1.26
 
 WORKDIR /app
 
-COPY .. .
+COPY . .
 
 WORKDIR /app/worker
 
