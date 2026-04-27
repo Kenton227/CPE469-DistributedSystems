@@ -2,6 +2,8 @@ package common
 
 import "time"
 
+const BATCH_SIZE = 100
+
 type TaskType int
 
 const (
@@ -16,10 +18,6 @@ type KeyValue struct {
 	Value string
 }
 
-type RequestTaskArgs struct {
-	WorkerAddr string
-}
-
 type taskStatus int
 
 const (
@@ -28,17 +26,18 @@ const (
 	Completed
 )
 
+type RequestTaskArgs struct {
+	WorkerAddr string
+}
+
 type Task struct {
 	Type      TaskType
 	Id        int
-	Filename  string
+	URLs      []string
 	StartTime time.Time
 	Status    taskStatus
 	R         int
 	M         int
-
-	// for reduce tasks: map task id -> worker addr that owns that map output
-	MapOwners map[int]string
 }
 
 type HeartbeatArgs struct{}
@@ -48,9 +47,8 @@ type HeartbeatReply struct {
 }
 
 type ReportTaskArgs struct {
-	Type       TaskType
-	TaskID     int
-	WorkerAddr string
+	Type   TaskType
+	TaskID int
 }
 
 type ReportTaskReply struct{}

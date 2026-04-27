@@ -7,8 +7,6 @@ import (
 	"net/rpc"
 	"os"
 	"prog4/common"
-	"sort"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -19,13 +17,13 @@ const START_TIMEOUT = 30 * time.Second
 
 type WorkerRPC struct {
 	mutex       sync.Mutex
-	mapOutputs  map[int]map[int][]common.KeyValue
+	mapOutputs  map[int][]common.KeyValue
 	addr        string
 	currentTask *common.Task
 }
 
 var workerState = &WorkerRPC{
-	mapOutputs: make(map[int]map[int][]common.KeyValue),
+	mapOutputs: make(map[int][]common.KeyValue),
 }
 
 func registerToCoord(workerAddr string) (*rpc.Client, error) {
@@ -63,30 +61,26 @@ func main() {
 	defer coordClient.Close()
 
 	for {
-		// if time.Since(startTime) > TIMEOUT_LIMIT {
-		// 	fmt.Println("10s connection time out")
-		// 	return
-		// }
+		task, err := requestTask(coordClient, workerAddr)
+		if err != nil {
+			fmt.Println("requestTask:", err)
+			time.Sleep(time.Second)
+			continue
+		}
 
-		// task, err := requestTask(coordClient, workerAddr)
-		// if err != nil {
-		// 	fmt.Println("requestTask:", err)
-		// 	time.Sleep(time.Second)
-		// 	continue
-		// }
-
-		// switch task.Type {
-		// case common.Map:
-		// 	err := doMapTask(task)
-		// 	if err != nil {
-		// 		fmt.Println("doMapTask:", err)
-		// 		return
-		// 	}
-		// 	err = reportTaskDone(task, workerAddr)
-		// 	if err != nil {
-		// 		fmt.Println("reportTaskDone:", err)
-		// 		return
-		// 	}
+		switch task.Type {
+		case common.Map:
+			err := doMapTask(task)
+			if err != nil {
+				fmt.Println("doMapTask:", err)
+				return
+			}
+			err = reportTaskDone(task, workerAddr, coordClient)
+			if err != nil {
+				fmt.Println("reportTaskDone:", err)
+				return
+			}
+		}
 
 		// case common.Reduce:
 		// 	err := doReduceTask(task)
@@ -172,7 +166,13 @@ func doMapTask(mapTask *common.Task) error {
 	fmt.Println("starting map task", mapTask.Id)
 
 	workerState.mutex.Lock()
-	workerState.mutex.Unlock()
+	defer workerState.mutex.Unlock()
+
+	// TODO: WRITE MAPPING LOGIC...
+
+	// Crawl set of urls in Task.URLs
+
+	// Store key value pairs in workerState.mapOutputs
 
 	return nil
 }
@@ -205,74 +205,73 @@ func readByteRange(filename string, start int, end int) ([]byte, error) {
 func doReduceTask(reduceTask *common.Task) error {
 	fmt.Println("starting reduce task", reduceTask.Id)
 
-	reduceMap := make(map[string]int)
+	// reduceMap := make(map[string]int)
 
-	type fetchResult struct {
-		pairs []common.KeyValue
-		err   error
-	}
+	// type fetchResult struct {
+	// 	pairs []common.KeyValue
+	// 	err   error
+	// }
 
-	results := make(chan fetchResult, reduceTask.M)
+	// results := make(chan fetchResult, reduceTask.M)
 
-	var wg sync.WaitGroup
-	for mapTaskID := 0; mapTaskID < reduceTask.M; mapTaskID++ {
-		ownerAddr, ok := reduceTask.MapOwners[mapTaskID]
-		if !ok {
-			return fmt.Errorf("missing owner for map task %d", mapTaskID)
-		}
+	// var wg sync.WaitGroup
+	// for mapTaskID := 0; mapTaskID < reduceTask.M; mapTaskID++ {
+	// 	if !ok {
+	// 		return fmt.Errorf("missing owner for map task %d", mapTaskID)
+	// 	}
 
-		wg.Add(1)
-		go func(mapID int, addr string) {
-			defer wg.Done()
+	// 	wg.Add(1)
+	// 	go func(mapID int, addr string) {
+	// 		defer wg.Done()
 
-			pairs, err := fetchPartition(addr, mapID, reduceTask.Id)
-			results <- fetchResult{pairs: pairs, err: err}
-		}(mapTaskID, ownerAddr)
-	}
+	// 		pairs, err := fetchPartition(addr, mapID, reduceTask.Id)
+	// 		results <- fetchResult{pairs: pairs, err: err}
+	// 	}(mapTaskID, ownerAddr)
+	// }
 
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+	// go func() {
+	// 	wg.Wait()
+	// 	close(results)
+	// }()
 
-	for result := range results {
-		if result.err != nil {
-			return result.err
-		}
-		for _, keyVal := range result.pairs {
-			val, err := strconv.Atoi(keyVal.Value)
-			if err != nil {
-				return err
-			}
-			reduceMap[keyVal.Key] += val
-		}
-	}
+	// for result := range results {
+	// 	if result.err != nil {
+	// 		return result.err
+	// 	}
+	// 	for _, keyVal := range result.pairs {
+	// 		val, err := strconv.Atoi(keyVal.Value)
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 		reduceMap[keyVal.Key] += val
+	// 	}
+	// }
 
-	err := os.MkdirAll(OUTPUT_DIR, 0755)
-	if err != nil {
-		return err
-	}
+	// err := os.MkdirAll(OUTPUT_DIR, 0755)
+	// if err != nil {
+	// 	return err
+	// }
 
-	outputFilename := fmt.Sprintf("%s/mr-out-%d.txt", OUTPUT_DIR, reduceTask.Id)
-	fptr, err := os.Create(outputFilename)
-	if err != nil {
-		return err
-	}
-	defer fptr.Close()
+	// outputFilename := fmt.Sprintf("%s/mr-out-%d.txt", OUTPUT_DIR, reduceTask.Id)
+	// fptr, err := os.Create(outputFilename)
+	// if err != nil {
+	// 	return err
+	// }
+	// defer fptr.Close()
 
-	words := make([]string, 0, len(reduceMap))
-	for word := range reduceMap {
-		words = append(words, word)
-	}
-	sort.Strings(words)
+	// words := make([]string, 0, len(reduceMap))
+	// for word := range reduceMap {
+	// 	words = append(words, word)
+	// }
+	// sort.Strings(words)
 
-	for _, word := range words {
-		line := fmt.Sprintf("%s: %d\n", word, reduceMap[word])
-		_, err = fptr.WriteString(line)
-		if err != nil {
-			return err
-		}
-	}
+	// for _, word := range words {
+	// 	line := fmt.Sprintf("%s: %d\n", word, reduceMap[word])
+	// 	_, err = fptr.WriteString(line)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
 
 	return nil
 }
@@ -298,27 +297,6 @@ func fetchPartition(workerAddr string, mapTaskID int, reduceID int) ([]common.Ke
 	return reply.Pairs, nil
 }
 
-func (w *WorkerRPC) GetPartition(args *common.GetPartitionArgs, reply *common.GetPartitionReply) error {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	perMap, ok := w.mapOutputs[args.MapTaskID]
-	if !ok {
-		reply.Pairs = []common.KeyValue{}
-		return nil
-	}
-
-	pairs, ok := perMap[args.ReduceID]
-	if !ok {
-		reply.Pairs = []common.KeyValue{}
-		return nil
-	}
-
-	reply.Pairs = make([]common.KeyValue, len(pairs))
-	copy(reply.Pairs, pairs)
-	return nil
-}
-
 func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 	args := &common.RequestTaskArgs{WorkerAddr: workerAddr}
 	reply := &common.Task{}
@@ -331,19 +309,12 @@ func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 	return reply, nil
 }
 
-func reportTaskDone(task *common.Task, workerAddr string) error {
-	client, err := rpc.Dial("tcp", "coordinator:1234")
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
+func reportTaskDone(task *common.Task, workerAddr string, coord *rpc.Client) error {
 	args := &common.ReportTaskArgs{
-		Type:       task.Type,
-		TaskID:     task.Id,
-		WorkerAddr: workerAddr,
+		Type:   task.Type,
+		TaskID: task.Id,
 	}
 	reply := &common.ReportTaskReply{}
 
-	return client.Call("Coordinator.ReportTask", args, reply)
+	return coord.Call("Coordinator.ReportTask", args, reply)
 }

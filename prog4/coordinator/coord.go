@@ -15,6 +15,7 @@ import (
 
 const taskTimeout = 10 * time.Second
 const HEARTBEAT_INTERVAL = 2 * time.Second
+const MAX_URLS = 100
 
 type phase int
 
@@ -24,9 +25,15 @@ const (
 	completed
 )
 
+type Frontier struct {
+	toVisit []string
+	visited map[string]bool
+}
+
 type Coordinator struct {
 	mutex       sync.Mutex
 	phase       phase
+	frontier    Frontier
 	mapTasks    []common.Task
 	reduceTasks []common.Task
 	mNum        int
@@ -90,6 +97,8 @@ func main() {
 		return
 	}
 
+	go rpcListen(coord)
+
 	// err = makeBatches(M, inputFile, coord)
 	// if err != nil {
 	// 	return
@@ -101,6 +110,7 @@ func main() {
 			go sendHeartbeats(coord)
 			lastHeartbeat = time.Now()
 		}
+
 		time.Sleep(500 * time.Millisecond)
 	}
 
@@ -137,41 +147,58 @@ func (coord *Coordinator) RegisterWorker(args *common.RegisterWorkerArgs, reply 
 	return nil
 }
 
+func checkPhaseSwitch(coord *Coordinator) {
+	var tasks []common.Task
+	switch coord.phase {
+	case mapPhase:
+		tasks = coord.mapTasks
+	case reducePhase:
+		tasks = coord.reduceTasks
+	}
+	allCompleted := true
+	for _, task := range tasks {
+		if task.Status != common.Completed {
+			allCompleted = false
+		}
+	}
+	if allCompleted {
+		coord.phase += 1
+	}
+}
+
 func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *common.Task) error {
 	coord.mutex.Lock()
 	defer coord.mutex.Unlock()
 
-	// now := time.Now()
+	if args.WorkerAddr == "" || coord.workers[args.WorkerAddr] == nil {
+		return errors.New("Bad Worker")
+	}
 
-	// if args.WorkerAddr != "" {
-	// 	coord.workers[args.WorkerAddr] = true
-	// }
+	checkPhaseSwitch(coord)
 
-	// if coord.phase == mapPhase {
-	// 	allCompleted := true
+	switch coord.phase {
+	case mapPhase:
+		if len(coord.frontier.toVisit) > 0 || len(coord.frontier.visited) < MAX_URLS {
+			frontierCutoff := min(common.BATCH_SIZE, len(coord.frontier.toVisit))
+			newTask := common.Task{
+				Type:      common.Map,
+				Id:        len(coord.mapTasks),
+				URLs:      coord.frontier.toVisit[:frontierCutoff],
+				StartTime: time.Now(),
+				Status:    common.InProgress,
+				R:         coord.rNum,
+				M:         coord.mNum,
+			}
+			coord.frontier.toVisit = coord.frontier.toVisit[frontierCutoff:]
+			coord.mapTasks = append(coord.mapTasks, newTask)
+			*reply = newTask
+		}
 
-	// 	for id, mapTask := range coord.mapTasks {
-	// 		if mapTask.Status == common.Idle || (mapTask.Status == common.InProgress && now.Sub(mapTask.StartTime) > taskTimeout) {
-	// 			reply.Type = common.Map
-	// 			reply.Id = id
-	// 			reply.Filename = mapTask.Filename
+	case reducePhase:
+		return nil
 
-	// 			coord.mapTasks[id].Status = common.InProgress
-	// 			coord.mapTasks[id].StartTime = now
-	// 			return nil
-	// 		}
-	// 		if mapTask.Status != common.Completed {
-	// 			allCompleted = false
-	// 		}
-	// 	}
-
-	// 	if allCompleted {
-	// 		coord.phase = reducePhase
-	// 	} else {
-	// 		reply.Type = common.Wait
-	// 		return nil
-	// 	}
-	// }
+	}
+	return nil
 
 	// if coord.phase == reducePhase {
 	// 	allCompleted := true
@@ -213,8 +240,10 @@ func (coord *Coordinator) ReportTask(args *common.ReportTaskArgs, reply *common.
 
 	switch args.Type {
 	case common.Map:
+		if args.TaskID < 0 || args.TaskID >= len(coord.mapTasks) {
+			return fmt.Errorf("map task id %d out of range", args.TaskID)
+		}
 		coord.mapTasks[args.TaskID].Status = common.Completed
-		coord.mapOwner[args.TaskID] = args.WorkerAddr
 	case common.Reduce:
 		coord.reduceTasks[args.TaskID].Status = common.Completed
 	}
@@ -239,6 +268,7 @@ func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 		rNum:     R,
 		workers:  make(map[string]*rpc.Client),
 		mapOwner: make(map[int]string),
+		frontier: Frontier{toVisit: make([]string, 0), visited: make(map[string]bool)},
 	}
 
 	if err := rpc.RegisterName("Coordinator", coord); err != nil {
@@ -250,13 +280,10 @@ func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 			Type:      common.Reduce,
 			Id:        i,
 			Status:    common.Idle,
-			Filename:  "",
 			StartTime: time.Now(),
 		}
 		coord.reduceTasks = append(coord.reduceTasks, reduceTask)
 	}
-
-	go rpcListen(coord)
 
 	return coord, nil
 }
