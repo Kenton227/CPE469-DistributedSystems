@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-const taskTimeout = 10 * time.Second
-const HEARTBEAT_INTERVAL = 2 * time.Second
+const TASK_TIMEOUT = 10 * time.Second
+const HEARTBEAT_INTERVAL = 10 * time.Second
 const MAX_URLS = 100
 
 type phase int
@@ -147,9 +147,11 @@ func (coord *Coordinator) RegisterWorker(args *common.RegisterWorkerArgs, reply 
 	return nil
 }
 
-func checkPhaseSwitch(coord *Coordinator) {
+func advancePhase(coord *Coordinator) {
 	var tasks []common.Task
 	switch coord.phase {
+	case completed:
+		return
 	case mapPhase:
 		tasks = coord.mapTasks
 	case reducePhase:
@@ -159,11 +161,23 @@ func checkPhaseSwitch(coord *Coordinator) {
 	for _, task := range tasks {
 		if task.Status != common.Completed {
 			allCompleted = false
+			// fmt.Println("Incomplete task found:", task.Id)
 		}
 	}
 	if allCompleted {
 		coord.phase += 1
+		fmt.Println("Advanced phase to", coord.phase)
 	}
+}
+
+// Iteratively scan through coord.reduceTasks for the next
+func getReduceTask(coord *Coordinator) *common.Task {
+	for _, reduceTask := range coord.reduceTasks {
+		if reduceTask.Status == common.Idle || (reduceTask.Status == common.InProgress && time.Now().Sub(reduceTask.StartTime) > TASK_TIMEOUT) {
+			return &reduceTask
+		}
+	}
+	return nil
 }
 
 func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *common.Task) error {
@@ -174,13 +188,14 @@ func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *commo
 		return errors.New("Bad Worker")
 	}
 
-	checkPhaseSwitch(coord)
+	advancePhase(coord)
 
+	var newTask common.Task
 	switch coord.phase {
 	case mapPhase:
 		if len(coord.frontier.toVisit) > 0 || len(coord.frontier.visited) < MAX_URLS {
 			frontierCutoff := min(common.BATCH_SIZE, len(coord.frontier.toVisit))
-			newTask := common.Task{
+			newTask = common.Task{
 				Type:      common.Map,
 				Id:        len(coord.mapTasks),
 				URLs:      coord.frontier.toVisit[:frontierCutoff],
@@ -191,46 +206,33 @@ func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *commo
 			}
 			coord.frontier.toVisit = coord.frontier.toVisit[frontierCutoff:]
 			coord.mapTasks = append(coord.mapTasks, newTask)
-			*reply = newTask
+
 		}
 
 	case reducePhase:
-		return nil
+		newTask = *getReduceTask(coord)
+
+	case completed:
+		newTask = common.Task{
+			Type:      common.Done,
+			Id:        -1,
+			URLs:      nil,
+			StartTime: time.Now(),
+			Status:    common.Completed,
+		}
+
+	default:
+		newTask = common.Task{
+			Type:      common.Wait,
+			Id:        -1,
+			URLs:      nil,
+			StartTime: time.Now(),
+			Status:    common.Completed,
+		}
 
 	}
-	return nil
 
-	// if coord.phase == reducePhase {
-	// 	allCompleted := true
-
-	// 	for id, reduceTask := range coord.reduceTasks {
-	// 		if reduceTask.Status == common.Idle || (reduceTask.Status == common.InProgress && now.Sub(reduceTask.StartTime) > taskTimeout) {
-	// 			reply.Type = common.Reduce
-	// 			reply.Id = id
-	// 			reply.MapOwners = make(map[int]string, len(coord.mapOwner))
-	// 			for k, v := range coord.mapOwner {
-	// 				reply.MapOwners[k] = v
-	// 			}
-
-	// 			coord.reduceTasks[id].Status = common.InProgress
-	// 			coord.reduceTasks[id].StartTime = now
-	// 			return nil
-	// 		}
-	// 		if reduceTask.Status != common.Completed {
-	// 			allCompleted = false
-	// 		}
-	// 	}
-
-	// 	if allCompleted {
-	// 		coord.phase = completed
-	// 		reply.Type = common.Done
-	// 	} else {
-	// 		reply.Type = common.Wait
-	// 	}
-	// 	return nil
-	// }
-
-	// reply.Type = common.Done
+	*reply = newTask
 	return nil
 }
 

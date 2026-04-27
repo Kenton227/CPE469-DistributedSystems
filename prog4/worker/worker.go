@@ -61,6 +61,7 @@ func main() {
 	defer coordClient.Close()
 
 	for {
+		fmt.Println("Requesting task...")
 		task, err := requestTask(coordClient, workerAddr)
 		if err != nil {
 			fmt.Println("requestTask:", err)
@@ -75,33 +76,32 @@ func main() {
 				fmt.Println("doMapTask:", err)
 				return
 			}
-			err = reportTaskDone(task, workerAddr, coordClient)
+			err = reportTaskDone(task, coordClient)
 			if err != nil {
 				fmt.Println("reportTaskDone:", err)
 				return
 			}
+
+		case common.Reduce:
+			err := doReduceTask(task)
+			if err != nil {
+				fmt.Println("doReduceTask:", err)
+				return
+			}
+			err = reportTaskDone(task, coordClient)
+			if err != nil {
+				fmt.Println("reportTaskDone:", err)
+				return
+			}
+
+		case common.Wait:
+			fmt.Println("waiting for task...")
+			time.Sleep(time.Second)
+
+		case common.Done:
+			fmt.Println("nothing to do, exiting...")
+			return
 		}
-
-		// case common.Reduce:
-		// 	err := doReduceTask(task)
-		// 	if err != nil {
-		// 		fmt.Println("doReduceTask:", err)
-		// 		return
-		// 	}
-		// 	err = reportTaskDone(task, workerAddr)
-		// 	if err != nil {
-		// 		fmt.Println("reportTaskDone:", err)
-		// 		return
-		// 	}
-
-		// case common.Wait:
-		// 	fmt.Println("waiting for task...")
-		// 	time.Sleep(time.Second)
-
-		// case common.Done:
-		// 	fmt.Println("nothing to do, exiting...")
-		// 	return
-		// }
 	}
 }
 
@@ -309,7 +309,7 @@ func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 	return reply, nil
 }
 
-func reportTaskDone(task *common.Task, workerAddr string, coord *rpc.Client) error {
+func reportTaskDone(task *common.Task, coord *rpc.Client) error {
 	args := &common.ReportTaskArgs{
 		Type:   task.Type,
 		TaskID: task.Id,
