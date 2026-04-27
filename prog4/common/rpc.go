@@ -1,5 +1,7 @@
 package common
 
+import "time"
+
 type TaskType int
 
 const (
@@ -18,17 +20,31 @@ type RequestTaskArgs struct {
 	WorkerAddr string
 }
 
-type RequestTaskReply struct {
+type taskStatus int
+
+const (
+	Idle taskStatus = iota
+	InProgress
+	Completed
+)
+
+type Task struct {
 	Type      TaskType
 	Id        int
 	Filename  string
-	StartByte int
-	EndByte   int
-	MNum      int
-	RNum      int
+	StartTime time.Time
+	Status    taskStatus
+	R         int
+	M         int
 
 	// for reduce tasks: map task id -> worker addr that owns that map output
 	MapOwners map[int]string
+}
+
+type HeartbeatArgs struct{}
+type HeartbeatReply struct {
+	WorkerAddr string
+	TaskId     int
 }
 
 type ReportTaskArgs struct {

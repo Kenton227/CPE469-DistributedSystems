@@ -6,10 +6,9 @@ import (
 	"net"
 	"net/rpc"
 	"os"
-	"prog3/common"
+	"prog4/common"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -19,88 +18,107 @@ const OUTPUT_DIR = "/app/output"
 const START_TIMEOUT = 30 * time.Second
 
 type WorkerRPC struct {
-	mutex sync.Mutex
-
-	// mapOutputs[mapTaskID][reduceID] = []KeyValue
-	mapOutputs map[int]map[int][]common.KeyValue
+	mutex       sync.Mutex
+	mapOutputs  map[int]map[int][]common.KeyValue
+	addr        string
+	currentTask *common.Task
 }
 
 var workerState = &WorkerRPC{
 	mapOutputs: make(map[int]map[int][]common.KeyValue),
 }
 
+func registerToCoord(workerAddr string) (*rpc.Client, error) {
+	coordClient, err := rpc.Dial("tcp", "coordinator:1234")
+	if err != nil {
+		fmt.Println("rpc.Dial:", err)
+		return coordClient, err
+	}
+
+	err = registerWorker(coordClient, workerAddr) // Register to coord
+	if err != nil {
+		fmt.Println("registerWorker:", err)
+		return coordClient, err
+	}
+
+	fmt.Println("Successful registration to coord")
+
+	return coordClient, err
+}
+
 func main() {
 
-	workerAddr, err := startWorkerRPCServer()
+	workerAddr, err := startWorkerRPCServer() // Start Worker server
 	if err != nil {
 		fmt.Println("startWorkerRPCServer:", err)
 		return
 	}
+	workerState.addr = workerAddr
 
-	var coordClient *rpc.Client
-	startTime := time.Now()
-	for time.Since(startTime) < START_TIMEOUT {
-		coordClient, err = rpc.Dial("tcp", "coordinator:1234")
-		if err == nil {
-			fmt.Println("rpc.Dial:", err)
-			break
-		}
-	}
-
-	defer coordClient.Close()
-
-	if err := registerWorker(coordClient, workerAddr); err != nil {
-		fmt.Println("registerWorker:", err)
+	coordClient, err := registerToCoord(workerAddr) // Register to Coord
+	if err != nil {
+		fmt.Println("connectCoord: ", err)
 		return
 	}
+	defer coordClient.Close()
 
 	for {
-		if time.Since(startTime) > TIMEOUT_LIMIT {
-			fmt.Println("10s connection time out")
-			return
-		}
+		// if time.Since(startTime) > TIMEOUT_LIMIT {
+		// 	fmt.Println("10s connection time out")
+		// 	return
+		// }
 
-		task, err := requestTask(coordClient, workerAddr)
-		if err != nil {
-			fmt.Println("requestTask:", err)
-			time.Sleep(time.Second)
-			continue
-		}
+		// task, err := requestTask(coordClient, workerAddr)
+		// if err != nil {
+		// 	fmt.Println("requestTask:", err)
+		// 	time.Sleep(time.Second)
+		// 	continue
+		// }
 
-		switch task.Type {
-		case common.Map:
-			err := doMapTask(task)
-			if err != nil {
-				fmt.Println("doMapTask:", err)
-				return
-			}
-			err = reportTaskDone(task, workerAddr)
-			if err != nil {
-				fmt.Println("reportTaskDone:", err)
-				return
-			}
+		// switch task.Type {
+		// case common.Map:
+		// 	err := doMapTask(task)
+		// 	if err != nil {
+		// 		fmt.Println("doMapTask:", err)
+		// 		return
+		// 	}
+		// 	err = reportTaskDone(task, workerAddr)
+		// 	if err != nil {
+		// 		fmt.Println("reportTaskDone:", err)
+		// 		return
+		// 	}
 
-		case common.Reduce:
-			err := doReduceTask(task)
-			if err != nil {
-				fmt.Println("doReduceTask:", err)
-				return
-			}
-			err = reportTaskDone(task, workerAddr)
-			if err != nil {
-				fmt.Println("reportTaskDone:", err)
-				return
-			}
+		// case common.Reduce:
+		// 	err := doReduceTask(task)
+		// 	if err != nil {
+		// 		fmt.Println("doReduceTask:", err)
+		// 		return
+		// 	}
+		// 	err = reportTaskDone(task, workerAddr)
+		// 	if err != nil {
+		// 		fmt.Println("reportTaskDone:", err)
+		// 		return
+		// 	}
 
-		case common.Wait:
-			fmt.Println("waiting for task...")
-			time.Sleep(time.Second)
+		// case common.Wait:
+		// 	fmt.Println("waiting for task...")
+		// 	time.Sleep(time.Second)
 
-		case common.Done:
-			fmt.Println("nothing to do, exiting...")
-			return
-		}
+		// case common.Done:
+		// 	fmt.Println("nothing to do, exiting...")
+		// 	return
+		// }
 	}
+}
+
+func (w *WorkerRPC) RecvHeartbeat(args *common.HeartbeatArgs, reply *common.HeartbeatReply) error {
+	id := -1
+	if w.currentTask != nil {
+		id = w.currentTask.Id
+	}
+	reply.TaskId = id
+	reply.WorkerAddr = w.addr
+	return nil
 }
 
 func startWorkerRPCServer() (string, error) {
@@ -113,7 +131,7 @@ func startWorkerRPCServer() (string, error) {
 		return "", err
 	}
 
-	go func() {
+	go func() { // Threaded listen for requests
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -130,6 +148,7 @@ func startWorkerRPCServer() (string, error) {
 		return "", err
 	}
 
+	// Parse Worker
 	port := listener.Addr().(*net.TCPAddr).Port
 	addr := fmt.Sprintf("%s:%d", host, port)
 	fmt.Println("worker rpc listening at", addr)
@@ -149,38 +168,10 @@ func idxHash(word string) int {
 	return posHash
 }
 
-func doMapTask(mapTask *common.RequestTaskReply) error {
+func doMapTask(mapTask *common.Task) error {
 	fmt.Println("starting map task", mapTask.Id)
 
-	data, err := readByteRange(mapTask.Filename, mapTask.StartByte, mapTask.EndByte)
-	if err != nil {
-		return err
-	}
-
-	words := strings.Fields(string(data))
-
-	partitions := make(map[int][]common.KeyValue)
-	counts := make([]map[string]int, mapTask.RNum)
-	for i := 0; i < mapTask.RNum; i++ {
-		counts[i] = make(map[string]int)
-	}
-
-	for _, word := range words {
-		reduceID := idxHash(word) % mapTask.RNum
-		counts[reduceID][word]++
-	}
-
-	for reduceID := 0; reduceID < mapTask.RNum; reduceID++ {
-		for word, count := range counts[reduceID] {
-			partitions[reduceID] = append(partitions[reduceID], common.KeyValue{
-				Key:   word,
-				Value: strconv.Itoa(count),
-			})
-		}
-	}
-
 	workerState.mutex.Lock()
-	workerState.mapOutputs[mapTask.Id] = partitions
 	workerState.mutex.Unlock()
 
 	return nil
@@ -211,7 +202,7 @@ func readByteRange(filename string, start int, end int) ([]byte, error) {
 	return buf, nil
 }
 
-func doReduceTask(reduceTask *common.RequestTaskReply) error {
+func doReduceTask(reduceTask *common.Task) error {
 	fmt.Println("starting reduce task", reduceTask.Id)
 
 	reduceMap := make(map[string]int)
@@ -221,10 +212,10 @@ func doReduceTask(reduceTask *common.RequestTaskReply) error {
 		err   error
 	}
 
-	results := make(chan fetchResult, reduceTask.MNum)
+	results := make(chan fetchResult, reduceTask.M)
 
 	var wg sync.WaitGroup
-	for mapTaskID := 0; mapTaskID < reduceTask.MNum; mapTaskID++ {
+	for mapTaskID := 0; mapTaskID < reduceTask.M; mapTaskID++ {
 		ownerAddr, ok := reduceTask.MapOwners[mapTaskID]
 		if !ok {
 			return fmt.Errorf("missing owner for map task %d", mapTaskID)
@@ -328,9 +319,9 @@ func (w *WorkerRPC) GetPartition(args *common.GetPartitionArgs, reply *common.Ge
 	return nil
 }
 
-func requestTask(client *rpc.Client, workerAddr string) (*common.RequestTaskReply, error) {
+func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 	args := &common.RequestTaskArgs{WorkerAddr: workerAddr}
-	reply := &common.RequestTaskReply{}
+	reply := &common.Task{}
 
 	err := client.Call("Coordinator.RequestTask", args, reply)
 	if err != nil {
@@ -340,7 +331,7 @@ func requestTask(client *rpc.Client, workerAddr string) (*common.RequestTaskRepl
 	return reply, nil
 }
 
-func reportTaskDone(task *common.RequestTaskReply, workerAddr string) error {
+func reportTaskDone(task *common.Task, workerAddr string) error {
 	client, err := rpc.Dial("tcp", "coordinator:1234")
 	if err != nil {
 		return err

@@ -7,31 +7,14 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
-	"prog3/common"
+	"prog4/common"
 	"strconv"
 	"sync"
 	"time"
 )
 
 const taskTimeout = 10 * time.Second
-
-type status int
-
-const (
-	idle status = iota
-	inProgress
-	done
-)
-
-type task struct {
-	id        int
-	status    status
-	startTime time.Time
-
-	filename  string
-	startByte int
-	endByte   int
-}
+const HEARTBEAT_INTERVAL = 2 * time.Second
 
 type phase int
 
@@ -44,13 +27,13 @@ const (
 type Coordinator struct {
 	mutex       sync.Mutex
 	phase       phase
-	mapTasks    []task
-	reduceTasks []task
+	mapTasks    []common.Task
+	reduceTasks []common.Task
 	mNum        int
 	rNum        int
 
-	workers  map[string]bool // registered workers
-	mapOwner map[int]string  // map task id -> worker addr
+	workers  map[string]*rpc.Client // registered workers
+	mapOwner map[int]string         // map task id -> worker addr
 }
 
 func validArgs(args []string) (int, int, string) {
@@ -89,10 +72,17 @@ func validArgs(args []string) (int, int, string) {
 	return M, R, absPath
 }
 
+func cleanupCoord(coord *Coordinator) {
+	coord.mutex.Lock()
+	defer coord.mutex.Unlock()
+
+	for _, client := range coord.workers {
+		client.Close()
+	}
+}
+
 func main() {
 	M, R, inputFile := validArgs(os.Args)
-
-	fmt.Println("Listening")
 
 	coord, err := StartCoordinator(M, R, inputFile)
 	if err != nil {
@@ -100,94 +90,120 @@ func main() {
 		return
 	}
 
+	// err = makeBatches(M, inputFile, coord)
+	// if err != nil {
+	// 	return
+	// }
+
+	lastHeartbeat := time.Now()
 	for !coord.Done() {
+		if time.Since(lastHeartbeat) > HEARTBEAT_INTERVAL {
+			go sendHeartbeats(coord)
+			lastHeartbeat = time.Now()
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	cleanupCoord(coord)
 	fmt.Println("Completed!")
+}
+
+func sendHeartbeats(coord *Coordinator) error {
+
+	for addr, client := range coord.workers {
+		args := &common.HeartbeatArgs{}
+		reply := &common.HeartbeatReply{}
+		err := client.Call("Worker.RecvHeartbeat", args, reply)
+		if err != nil {
+			fmt.Println("Heartbeat on", addr, ":", err)
+			continue
+		}
+		fmt.Println(reply.WorkerAddr, " working on ", reply.TaskId)
+	}
+	return nil
 }
 
 func (coord *Coordinator) RegisterWorker(args *common.RegisterWorkerArgs, reply *common.RegisterWorkerReply) error {
 	coord.mutex.Lock()
 	defer coord.mutex.Unlock()
 
-	coord.workers[args.WorkerAddr] = true
-	fmt.Println("registered worker:", args.WorkerAddr)
+	client, err := rpc.Dial("tcp", args.WorkerAddr)
+	if err != nil {
+		fmt.Println("rpc.Dial: ", err)
+		return err
+	}
+
+	coord.workers[args.WorkerAddr] = client
 	return nil
 }
 
-func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *common.RequestTaskReply) error {
+func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *common.Task) error {
 	coord.mutex.Lock()
 	defer coord.mutex.Unlock()
 
-	now := time.Now()
+	// now := time.Now()
 
-	if args.WorkerAddr != "" {
-		coord.workers[args.WorkerAddr] = true
-	}
+	// if args.WorkerAddr != "" {
+	// 	coord.workers[args.WorkerAddr] = true
+	// }
 
-	if coord.phase == mapPhase {
-		allCompleted := true
+	// if coord.phase == mapPhase {
+	// 	allCompleted := true
 
-		for id, mapTask := range coord.mapTasks {
-			if mapTask.status == idle || (mapTask.status == inProgress && now.Sub(mapTask.startTime) > taskTimeout) {
-				reply.Type = common.Map
-				reply.Id = id
-				reply.Filename = mapTask.filename
-				reply.StartByte = mapTask.startByte
-				reply.EndByte = mapTask.endByte
-				reply.RNum = coord.rNum
-				reply.MNum = coord.mNum
+	// 	for id, mapTask := range coord.mapTasks {
+	// 		if mapTask.Status == common.Idle || (mapTask.Status == common.InProgress && now.Sub(mapTask.StartTime) > taskTimeout) {
+	// 			reply.Type = common.Map
+	// 			reply.Id = id
+	// 			reply.Filename = mapTask.Filename
 
-				coord.mapTasks[id].status = inProgress
-				coord.mapTasks[id].startTime = now
-				return nil
-			}
-			if mapTask.status != done {
-				allCompleted = false
-			}
-		}
+	// 			coord.mapTasks[id].Status = common.InProgress
+	// 			coord.mapTasks[id].StartTime = now
+	// 			return nil
+	// 		}
+	// 		if mapTask.Status != common.Completed {
+	// 			allCompleted = false
+	// 		}
+	// 	}
 
-		if allCompleted {
-			coord.phase = reducePhase
-		} else {
-			reply.Type = common.Wait
-			return nil
-		}
-	}
+	// 	if allCompleted {
+	// 		coord.phase = reducePhase
+	// 	} else {
+	// 		reply.Type = common.Wait
+	// 		return nil
+	// 	}
+	// }
 
-	if coord.phase == reducePhase {
-		allCompleted := true
+	// if coord.phase == reducePhase {
+	// 	allCompleted := true
 
-		for id, reduceTask := range coord.reduceTasks {
-			if reduceTask.status == idle || (reduceTask.status == inProgress && now.Sub(reduceTask.startTime) > taskTimeout) {
-				reply.Type = common.Reduce
-				reply.Id = id
-				reply.MNum = coord.mNum
-				reply.RNum = coord.rNum
-				reply.MapOwners = make(map[int]string, len(coord.mapOwner))
-				for k, v := range coord.mapOwner {
-					reply.MapOwners[k] = v
-				}
+	// 	for id, reduceTask := range coord.reduceTasks {
+	// 		if reduceTask.Status == common.Idle || (reduceTask.Status == common.InProgress && now.Sub(reduceTask.StartTime) > taskTimeout) {
+	// 			reply.Type = common.Reduce
+	// 			reply.Id = id
+	// 			reply.MapOwners = make(map[int]string, len(coord.mapOwner))
+	// 			for k, v := range coord.mapOwner {
+	// 				reply.MapOwners[k] = v
+	// 			}
 
-				coord.reduceTasks[id].status = inProgress
-				coord.reduceTasks[id].startTime = now
-				return nil
-			}
-			if reduceTask.status != done {
-				allCompleted = false
-			}
-		}
+	// 			coord.reduceTasks[id].Status = common.InProgress
+	// 			coord.reduceTasks[id].StartTime = now
+	// 			return nil
+	// 		}
+	// 		if reduceTask.Status != common.Completed {
+	// 			allCompleted = false
+	// 		}
+	// 	}
 
-		if allCompleted {
-			coord.phase = completed
-			reply.Type = common.Done
-		} else {
-			reply.Type = common.Wait
-		}
-		return nil
-	}
+	// 	if allCompleted {
+	// 		coord.phase = completed
+	// 		reply.Type = common.Done
+	// 	} else {
+	// 		reply.Type = common.Wait
+	// 	}
+	// 	return nil
+	// }
 
-	reply.Type = common.Done
+	// reply.Type = common.Done
 	return nil
 }
 
@@ -197,10 +213,10 @@ func (coord *Coordinator) ReportTask(args *common.ReportTaskArgs, reply *common.
 
 	switch args.Type {
 	case common.Map:
-		coord.mapTasks[args.TaskID].status = done
+		coord.mapTasks[args.TaskID].Status = common.Completed
 		coord.mapOwner[args.TaskID] = args.WorkerAddr
 	case common.Reduce:
-		coord.reduceTasks[args.TaskID].status = done
+		coord.reduceTasks[args.TaskID].Status = common.Completed
 	}
 
 	return nil
@@ -210,54 +226,18 @@ func isSplitBoundary(b byte) bool {
 	return b == ' ' || b == '\n' || b == '\t' || b == '\r'
 }
 
-// create logical byte-range splits only; do not write split files
-func makeSplits(splitNum int, inputFile string, coord *Coordinator) error {
-	data, err := os.ReadFile(inputFile)
-	if err != nil {
-		fmt.Println("ReadFile:", err)
-		return err
-	}
-
-	fileSize := len(data)
-	startByte := 0
-
-	for i := 0; i < splitNum; i++ {
-		for startByte < fileSize && isSplitBoundary(data[startByte]) {
-			startByte++
-		}
-
-		endByte := fileSize
-		if i != splitNum-1 {
-			endByte = ((i + 1) * fileSize) / splitNum
-			if endByte < startByte {
-				endByte = startByte
-			}
-			for endByte < fileSize && !isSplitBoundary(data[endByte]) {
-				endByte++
-			}
-		}
-
-		mapTask := task{
-			id:        i,
-			status:    idle,
-			filename:  inputFile,
-			startByte: startByte,
-			endByte:   endByte,
-		}
-		coord.mapTasks = append(coord.mapTasks, mapTask)
-
-		startByte = endByte
-	}
-
+// create m URL batches from urlFile and hold them in coord
+func makeBatches(m int, urlFile string, coord *Coordinator) error {
 	return nil
 }
 
+// Initializes the Coordinator Object
 func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 	coord := &Coordinator{
 		phase:    mapPhase,
 		mNum:     M,
 		rNum:     R,
-		workers:  make(map[string]bool),
+		workers:  make(map[string]*rpc.Client),
 		mapOwner: make(map[int]string),
 	}
 
@@ -265,13 +245,14 @@ func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 		return nil, err
 	}
 
-	err := makeSplits(M, inputFile, coord)
-	if err != nil {
-		return nil, err
-	}
-
 	for i := 0; i < R; i++ {
-		reduceTask := task{id: i, status: idle}
+		reduceTask := common.Task{
+			Type:      common.Reduce,
+			Id:        i,
+			Status:    common.Idle,
+			Filename:  "",
+			StartTime: time.Now(),
+		}
 		coord.reduceTasks = append(coord.reduceTasks, reduceTask)
 	}
 

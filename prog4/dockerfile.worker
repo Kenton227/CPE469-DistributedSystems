@@ -2,7 +2,9 @@ FROM golang:1.26
 
 WORKDIR /app
 
-COPY . .
+COPY go.mod ./
+COPY common ./common
+COPY worker ./worker
 
 WORKDIR /app/worker
 
