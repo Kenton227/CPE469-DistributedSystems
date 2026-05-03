@@ -17,13 +17,13 @@ const START_TIMEOUT = 30 * time.Second
 
 type WorkerRPC struct {
 	mutex       sync.Mutex
-	mapOutputs  map[int][]common.KeyValue
+	mapOutputs  map[string]map[int][]common.KeyValue
 	addr        string
 	currentTask *common.Task
 }
 
 var workerState = &WorkerRPC{
-	mapOutputs: make(map[int][]common.KeyValue),
+	mapOutputs: make(map[string]map[int][]common.KeyValue),
 }
 
 func registerToCoord(workerAddr string) (*rpc.Client, error) {
@@ -83,7 +83,7 @@ func main() {
 			}
 
 		case common.Reduce:
-			err := doReduceTask(task)
+			err := doReduceTask(task, coordClient)
 			if err != nil {
 				fmt.Println("doReduceTask:", err)
 				return
@@ -174,7 +174,20 @@ func doMapTask(mapTask *common.Task) error {
 
 	// Store key value pairs in workerState.mapOutputs
 
+	updateMapOutput(workerState.addr, 0, common.KeyValue{Key: "apple", Value: "apple.com"})
+	updateMapOutput(workerState.addr, 1, common.KeyValue{Key: "banana", Value: "apple.com"})
+	updateMapOutput(workerState.addr, 2, common.KeyValue{Key: "cod", Value: "apple.com"})
+	updateMapOutput(workerState.addr, 3, common.KeyValue{Key: "decadent", Value: "apple.com"})
 	return nil
+}
+
+func updateMapOutput(workerAddr string, reduceId int, intermediatePair common.KeyValue) {
+	// Init new worker entry if needed
+	if _, ok := workerState.mapOutputs[workerState.addr]; !ok {
+		workerState.mapOutputs[workerState.addr] = make(map[int][]common.KeyValue)
+	}
+
+	workerState.mapOutputs[workerAddr][reduceId] = append(workerState.mapOutputs[workerAddr][reduceId], intermediatePair)
 }
 
 func readByteRange(filename string, start int, end int) ([]byte, error) {
@@ -202,8 +215,13 @@ func readByteRange(filename string, start int, end int) ([]byte, error) {
 	return buf, nil
 }
 
-func doReduceTask(reduceTask *common.Task) error {
+func doReduceTask(reduceTask *common.Task, coordClient *rpc.Client) error {
 	fmt.Println("starting reduce task", reduceTask.Id)
+
+	_, err := fetchIntermediateValues(reduceTask.Id, coordClient)
+	if err != nil {
+		return err
+	}
 
 	// reduceMap := make(map[string]int)
 
@@ -276,25 +294,56 @@ func doReduceTask(reduceTask *common.Task) error {
 	return nil
 }
 
-func fetchPartition(workerAddr string, mapTaskID int, reduceID int) ([]common.KeyValue, error) {
-	client, err := rpc.Dial("tcp", workerAddr)
-	if err != nil {
-		return nil, err
+// Called by reducer to retrieve all worker addresses from coord
+func getWorkerAddresses(coord *rpc.Client) []string {
+	args := &common.GetWorkerAddressesArgs{
+		RequestingWorkerAddr: workerState.addr,
 	}
-	defer client.Close()
+	reply := &common.GetWorkerAddressesReply{}
+	coord.Call("Coordinator.GetWorkerAddresses", args, reply)
 
-	args := &common.GetPartitionArgs{
-		MapTaskID: mapTaskID,
-		ReduceID:  reduceID,
+	return reply.WorkerAddresses
+}
+
+/*
+Called by the reducer to retrieve associated intermediate values
+Iterates through all registered workers and fetches corresponding map-outputs to ReduceTaskID
+*/
+func fetchIntermediateValues(reduceTaskID int, coord *rpc.Client) ([]common.KeyValue, error) {
+
+	var intermediatePairs []common.KeyValue
+
+	for _, workerAddr := range getWorkerAddresses(coord) {
+		fmt.Println("Requesting intermediate data from worker", workerAddr)
+		client, err := rpc.Dial("tcp", workerAddr)
+		if err != nil {
+			return nil, err // TODO: Ask coord for replica data instead
+		}
+		defer client.Close()
+
+		args := &common.GetIntermediateValuesArgs{
+			ReduceTaskID: reduceTaskID,
+		}
+		reply := &common.GetIntermediateValuesReply{}
+
+		err = client.Call("Worker.getIntermediateValues", args, reply)
+		if err != nil {
+			return nil, err
+		}
+
+		intermediatePairs = append(intermediatePairs, reply.IntermediatePairs...)
 	}
-	reply := &common.GetPartitionReply{}
 
-	err = client.Call("Worker.GetPartition", args, reply)
-	if err != nil {
-		return nil, err
-	}
+	return intermediatePairs, nil
+}
 
-	return reply.Pairs, nil
+func (w *WorkerRPC) getIntermediateValues(
+	args common.GetIntermediateValuesArgs,
+	reply common.GetIntermediateValuesReply,
+) error {
+	fmt.Println("Providing data for Reduce Task", args.ReduceTaskID)
+	reply.IntermediatePairs = w.mapOutputs[w.addr][args.ReduceTaskID]
+	return nil
 }
 
 func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
@@ -311,10 +360,43 @@ func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 
 func reportTaskDone(task *common.Task, coord *rpc.Client) error {
 	args := &common.ReportTaskArgs{
-		Type:   task.Type,
-		TaskID: task.Id,
+		WorkerAddr: workerState.addr,
+		Type:       task.Type,
+		TaskID:     task.Id,
 	}
 	reply := &common.ReportTaskReply{}
+	err := coord.Call("Coordinator.ReportTask", args, reply) // Ask coord who to send replicas to
+	if err != nil {
+		return err
+	}
 
-	return coord.Call("Coordinator.ReportTask", args, reply)
+	// Send replicas to those workers
+	for _, addr := range reply.ReplicaWorkerAddrs {
+		println("Writing replica to", addr)
+		client, err := rpc.Dial("tcp", addr)
+		if err != nil {
+			return nil
+		}
+		defer client.Close()
+
+		args := &common.AcceptReplicaArgs{
+			WorkerAddr: workerState.addr,
+		}
+		for i, pair := range workerState.mapOutputs[workerState.addr] {
+			args.MapOutput[i] = pair
+		}
+		reply := &common.AcceptReplicaReply{}
+
+		err = client.Call("Worker.AcceptReplica", args, reply)
+		if err != nil {
+			return nil // TODO: Maybe handle more gracefully?
+		}
+	}
+
+	return nil
+}
+
+func (w *WorkerRPC) AcceptReplica(args common.AcceptReplicaArgs, reply common.AcceptReplicaReply) error {
+	workerState.mapOutputs[args.WorkerAddr] = args.MapOutput
+	return nil
 }

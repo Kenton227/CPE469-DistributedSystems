@@ -47,13 +47,35 @@ services:
     volumes:
       - ./outputs:/app/output
 
-    # worker4:
-    #   build:
-    #     context: .
-    #     dockerfile: dockerfile.worker
-    #   container_name: rpc-worker4
-    #   command: ["worker4"]
-    #   ports:
-    #     - "9004:1234"
-    #   depends_on:
-    #     - coordinator
+  worker4:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker4
+    command: ["worker4"]
+    ports:
+      - "9004:1234"
+    depends_on:
+      - coordinator
+
+  worker5:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker5
+    command: ["worker5"]
+    ports:
+      - "9005:1234"
+    depends_on:
+      - coordinator
+
+  worker6:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker6
+    command: ["worker6"]
+    ports:
+      - "9006:1234"
+    depends_on:
+      - coordinator

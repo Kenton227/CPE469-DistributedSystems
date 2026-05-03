@@ -2,7 +2,7 @@ package common
 
 import "time"
 
-const BATCH_SIZE = 100
+const BATCH_SIZE = 10 // 100
 
 type TaskType int
 
@@ -47,11 +47,14 @@ type HeartbeatReply struct {
 }
 
 type ReportTaskArgs struct {
-	Type   TaskType
-	TaskID int
+	WorkerAddr string
+	Type       TaskType
+	TaskID     int
 }
 
-type ReportTaskReply struct{}
+type ReportTaskReply struct {
+	ReplicaWorkerAddrs []string
+}
 
 type RegisterWorkerArgs struct {
 	WorkerAddr string
@@ -59,11 +62,25 @@ type RegisterWorkerArgs struct {
 
 type RegisterWorkerReply struct{}
 
-type GetPartitionArgs struct {
-	MapTaskID int
-	ReduceID  int
+type GetIntermediateValuesArgs struct {
+	ReduceTaskID int
 }
 
-type GetPartitionReply struct {
-	Pairs []KeyValue
+type GetIntermediateValuesReply struct {
+	IntermediatePairs []KeyValue
 }
+
+type GetWorkerAddressesArgs struct {
+	RequestingWorkerAddr string
+}
+
+type GetWorkerAddressesReply struct {
+	WorkerAddresses []string
+}
+
+type AcceptReplicaArgs struct {
+	WorkerAddr string
+	MapOutput  map[int][]KeyValue
+}
+
+type AcceptReplicaReply struct{}
