@@ -8,3 +8,4 @@ WORKDIR /app/coordinator
 
 RUN go build -o coordinator
 
+

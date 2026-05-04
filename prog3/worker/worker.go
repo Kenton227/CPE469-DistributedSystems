@@ -211,15 +211,15 @@ func readByteRange(filename string, start int, end int) ([]byte, error) {
 	return buf, nil
 }
 
+type fetchResult struct {
+	pairs []common.KeyValue
+	err   error
+}
+
 func doReduceTask(reduceTask *common.RequestTaskReply) error {
 	fmt.Println("starting reduce task", reduceTask.Id)
 
 	reduceMap := make(map[string]int)
-
-	type fetchResult struct {
-		pairs []common.KeyValue
-		err   error
-	}
 
 	results := make(chan fetchResult, reduceTask.MNum)
 
