@@ -18,7 +18,7 @@ import (
 
 const TASK_TIMEOUT = 10 * time.Second
 const HEARTBEAT_INTERVAL = 10 * time.Second
-const MAX_URLS = 100
+const MAX_URLS = 2
 const START_DELAY = 100 * time.Millisecond
 
 type phase int
@@ -190,7 +190,7 @@ func advancePhase(coord *Coordinator) {
 	}
 }
 
-// Iteratively scan through coord.reduceTasks for the next
+// Iteratively scan through coord.reduceTasks for the next task
 func getReduceTask(coord *Coordinator) *common.Task {
 	for _, reduceTask := range coord.reduceTasks {
 		if reduceTask.Status == common.Idle || (reduceTask.Status == common.InProgress && time.Since(reduceTask.StartTime) > TASK_TIMEOUT) {

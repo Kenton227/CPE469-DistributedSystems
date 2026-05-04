@@ -4,19 +4,30 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net"
+	"net/http"
 	"net/rpc"
+	"net/url"
 	"os"
 	"prog4/common"
 	"sync"
 	"time"
+	"strings"
+	"regexp"
+	"strconv"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 const TIMEOUT_LIMIT = time.Minute
 const OUTPUT_DIR = "/app/output"
 const START_TIMEOUT = 30 * time.Second
+const TEXT_ELEMENTS = "title, h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote, pre, a"
+
+var nonAlphaNumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 type WorkerRPC struct {
 	mutex       sync.Mutex
+	// string is workerId, int is reduceIdTask, KeyValue is word -> URL
 	mapOutputs  map[string]map[int][]common.KeyValue
 	addr        string
 	currentTask *common.Task
@@ -71,12 +82,12 @@ func main() {
 
 		switch task.Type {
 		case common.Map:
-			err := doMapTask(task)
+			urls, err := doMapTask(task)
 			if err != nil {
 				fmt.Println("doMapTask:", err)
 				return
 			}
-			err = reportTaskDone(task, coordClient)
+			err = reportTaskDone(task, coordClient, urls)
 			if err != nil {
 				fmt.Println("reportTaskDone:", err)
 				return
@@ -88,7 +99,7 @@ func main() {
 				fmt.Println("doReduceTask:", err)
 				return
 			}
-			err = reportTaskDone(task, coordClient)
+			err = reportTaskDone(task, coordClient, nil)
 			if err != nil {
 				fmt.Println("reportTaskDone:", err)
 				return
@@ -162,23 +173,89 @@ func idxHash(word string) int {
 	return posHash
 }
 
-func doMapTask(mapTask *common.Task) error {
+func doMapTask(mapTask *common.Task) (map[string]bool, error) {
 	fmt.Println("starting map task", mapTask.Id)
 
 	workerState.mutex.Lock()
 	defer workerState.mutex.Unlock()
 
-	// TODO: WRITE MAPPING LOGIC...
+	// go through each url and process the text and links
+	urls := make(map[string]bool)
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, url := range mapTask.URLs {
+		resp, err := client.Get(url)
+		if err != nil {
+			continue
+		}
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
 
-	// Crawl set of urls in Task.URLs
+		processDocText(doc, mapTask, url)
+		processDocLinks(doc, mapTask, url, urls)
+	}
 
-	// Store key value pairs in workerState.mapOutputs
+	// fmt.Println("mapOutputs:", workerState.mapOutputs)
+	// fmt.Println("urls:", urls)
 
-	updateMapOutput(workerState.addr, 0, common.KeyValue{Key: "apple", Value: "apple.com"})
-	updateMapOutput(workerState.addr, 1, common.KeyValue{Key: "banana", Value: "apple.com"})
-	updateMapOutput(workerState.addr, 2, common.KeyValue{Key: "cod", Value: "apple.com"})
-	updateMapOutput(workerState.addr, 3, common.KeyValue{Key: "decadent", Value: "apple.com"})
-	return nil
+	return urls, nil
+}
+
+func processDocText(doc *goquery.Document, mapTask *common.Task, url string) {
+	doc.Find("script, style, noscript, svg").Remove()
+
+	doc.Find(TEXT_ELEMENTS).Each(
+		func(i int, s *goquery.Selection) {
+			text := strings.TrimSpace(s.Text())
+			cleanText := nonAlphaNumeric.ReplaceAllString(strings.ToLower(text), " ")
+			for _, token := range strings.Fields(cleanText) {
+				if token == "" {
+					continue
+				}
+				reduceId := idxHash(text) % mapTask.R
+				keyVal := common.KeyValue{Key: token, Value: url}
+				updateMapOutput(workerState.addr, reduceId, keyVal)
+			}
+		},
+	)
+}
+
+func processDocLinks(doc *goquery.Document, mapTask *common.Task, url string, urls map[string]bool) {
+	doc.Find("a[href]").Each(
+		func(i int, s *goquery.Selection) {
+			link, exists := s.Attr("href")
+			if exists {
+				link = resolveLink(url, strings.TrimSpace(link))
+				if link != "" && isValidHTTP(link) {
+					urls[url] = true
+				}
+			}
+		},
+	)
+}
+
+func isValidHTTP(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
+/* takes in a baseUrl and a link and returns the absolute path of the link */
+func resolveLink(baseUrl string, link string) string {
+	parsedBase, err := url.Parse(baseUrl)
+	if err != nil {
+		return ""
+	}
+	parsedLink, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+
+	return parsedBase.ResolveReference(parsedLink).String()
 }
 
 func updateMapOutput(workerAddr string, reduceId int, intermediatePair common.KeyValue) {
@@ -218,78 +295,48 @@ func readByteRange(filename string, start int, end int) ([]byte, error) {
 func doReduceTask(reduceTask *common.Task, coordClient *rpc.Client) error {
 	fmt.Println("starting reduce task", reduceTask.Id)
 
-	_, err := fetchIntermediateValues(reduceTask.Id, coordClient)
+	keyVals, err := fetchIntermediateValues(reduceTask.Id, coordClient)
 	if err != nil {
 		return err
 	}
 
-	// reduceMap := make(map[string]int)
+	fmt.Println(keyVals)
 
-	// type fetchResult struct {
-	// 	pairs []common.KeyValue
-	// 	err   error
-	// }
+	// make reduce map
+	reduceMap := make(map[string]int)
+	for _, keyVal := range keyVals {
+		val, err := strconv.Atoi(keyVal.Value)
+		if err != nil {
+			return err
+		}
+		reduceMap[keyVal.Key] += val
+	}
 
-	// results := make(chan fetchResult, reduceTask.M)
+	fmt.Println(reduceMap)
+	
+	// write output file for this reduce task
+	outputFilename := fmt.Sprintf("%s/mr-out-%d.txt", OUTPUT_DIR, reduceTask.Id)
 
-	// var wg sync.WaitGroup
-	// for mapTaskID := 0; mapTaskID < reduceTask.M; mapTaskID++ {
-	// 	if !ok {
-	// 		return fmt.Errorf("missing owner for map task %d", mapTaskID)
-	// 	}
+	// make directory and file
+	err = os.MkdirAll(OUTPUT_DIR, 0755)
+	if err != nil {
+		return err
+	}
+	fptr, err := os.Create(outputFilename)
+	if err != nil {
+		return err
+	}
+	defer fptr.Close()
 
-	// 	wg.Add(1)
-	// 	go func(mapID int, addr string) {
-	// 		defer wg.Done()
-
-	// 		pairs, err := fetchPartition(addr, mapID, reduceTask.Id)
-	// 		results <- fetchResult{pairs: pairs, err: err}
-	// 	}(mapTaskID, ownerAddr)
-	// }
-
-	// go func() {
-	// 	wg.Wait()
-	// 	close(results)
-	// }()
-
-	// for result := range results {
-	// 	if result.err != nil {
-	// 		return result.err
-	// 	}
-	// 	for _, keyVal := range result.pairs {
-	// 		val, err := strconv.Atoi(keyVal.Value)
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 		reduceMap[keyVal.Key] += val
-	// 	}
-	// }
-
-	// err := os.MkdirAll(OUTPUT_DIR, 0755)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// outputFilename := fmt.Sprintf("%s/mr-out-%d.txt", OUTPUT_DIR, reduceTask.Id)
-	// fptr, err := os.Create(outputFilename)
-	// if err != nil {
-	// 	return err
-	// }
-	// defer fptr.Close()
-
-	// words := make([]string, 0, len(reduceMap))
-	// for word := range reduceMap {
-	// 	words = append(words, word)
-	// }
-	// sort.Strings(words)
-
-	// for _, word := range words {
-	// 	line := fmt.Sprintf("%s: %d\n", word, reduceMap[word])
-	// 	_, err = fptr.WriteString(line)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// }
+	// write to file
+	for word, count := range reduceMap {
+		line := fmt.Sprintf("%s: %d\n", word, count)
+		_, err = fptr.WriteString(line)
+		if err != nil {
+			fptr.Close()
+			return err
+		}
+	}
 
 	return nil
 }
@@ -358,11 +405,12 @@ func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 	return reply, nil
 }
 
-func reportTaskDone(task *common.Task, coord *rpc.Client) error {
+func reportTaskDone(task *common.Task, coord *rpc.Client, urls map[string]bool) error {
 	args := &common.ReportTaskArgs{
 		WorkerAddr: workerState.addr,
 		Type:       task.Type,
 		TaskID:     task.Id,
+		FoundUrls:  urls,
 	}
 	reply := &common.ReportTaskReply{}
 	err := coord.Call("Coordinator.ReportTask", args, reply) // Ask coord who to send replicas to
@@ -381,6 +429,7 @@ func reportTaskDone(task *common.Task, coord *rpc.Client) error {
 
 		args := &common.AcceptReplicaArgs{
 			WorkerAddr: workerState.addr,
+			MapOutput: make(map[int][]common.KeyValue),
 		}
 		for i, pair := range workerState.mapOutputs[workerState.addr] {
 			args.MapOutput[i] = pair
