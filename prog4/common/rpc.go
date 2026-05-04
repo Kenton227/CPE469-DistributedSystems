@@ -50,6 +50,7 @@ type ReportTaskArgs struct {
 	WorkerAddr string
 	Type       TaskType
 	TaskID     int
+	FoundUrls  map[string]bool
 }
 
 type ReportTaskReply struct {
