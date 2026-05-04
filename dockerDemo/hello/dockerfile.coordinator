@@ -1,0 +1,13 @@
+
+FROM golang:1.26
+
+WORKDIR /app
+
+COPY .. .
+
+WORKDIR /app/coordinator
+
+
+RUN go build -o coordinator
+
+CMD [ "./coordinator" ]

@@ -1,0 +1,59 @@
+services:
+  coordinator:
+    build:
+      context: .
+      dockerfile: dockerfile.coordinator
+    command: ["./coordinator", "${M}", "${R}", "${INPUT_FILE}"]
+    container_name: rpc-coordinator
+    ports:
+      - "9000:1234"
+
+  worker1:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker1
+    command: ["worker1"]
+    ports:
+      - "9001:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+
+  worker2:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker2
+    command: ["worker2"]
+    ports:
+      - "9002:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+
+  worker3:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker3
+    command: ["worker3"]
+    ports:
+      - "9003:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+
+    # worker4:
+    #   build:
+    #     context: .
+    #     dockerfile: dockerfile.worker
+    #   container_name: rpc-worker4
+    #   command: ["worker4"]
+    #   ports:
+    #     - "9004:1234"
+    #   depends_on:
+    #     - coordinator

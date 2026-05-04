@@ -1,0 +1,30 @@
+services:
+  coordinator:
+    build:
+      context: .
+      dockerfile: dockerfile.coordinator
+    container_name: rpc-coordinator
+    ports:
+      - "3002:3001"
+
+  worker1:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker1
+    command: ["worker1"]
+    ports:
+      - "9003:2001"
+    depends_on:
+      - coordinator
+
+  worker2:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker2
+    command: ["worker2"]
+    ports:
+      - "9005:2001"
+    depends_on:
+      - coordinator

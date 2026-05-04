@@ -1,0 +1,13 @@
+FROM golang:1.26
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+COPY common ./common
+COPY worker ./worker
+
+WORKDIR /app/worker
+
+RUN go build -o worker
+
+ENTRYPOINT [ "./worker" ]
