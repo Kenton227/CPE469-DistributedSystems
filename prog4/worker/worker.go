@@ -457,7 +457,7 @@ func reportTaskDone(task *common.Task, coord *rpc.Client, urls map[string]bool) 
 		client, err := rpc.Dial("tcp", addr)
 		if err != nil {
 			fmt.Println("replica dial failed:", addr, err)
-			continue
+			continue // TODO: report task done again
 		}
 
 		args := &common.AcceptReplicaArgs{

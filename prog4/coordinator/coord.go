@@ -148,6 +148,7 @@ func getIntermediateData(failedAddr string, replicateClient *rpc.Client) (map[in
 }
 
 func handleFailedWorker(coord *Coordinator, failedAddr string) {
+	fmt.Println("Cleaning up failed worker", failedAddr)
 	delete(coord.workers, failedAddr)
 
 	// Remove failed worker from holders
