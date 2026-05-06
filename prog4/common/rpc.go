@@ -106,3 +106,12 @@ type DeleteFailedWorkerDataArgs struct {
 	FailedAddr string
 }
 type DeleteFailedWorkerDataReply struct{}
+
+type RequestNewReplicaArgs struct {
+	Original      string
+	FailedReplica string
+}
+
+type RequestNewReplicaReply struct {
+	NewReplica string
+}

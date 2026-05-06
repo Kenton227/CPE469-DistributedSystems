@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -22,6 +23,7 @@ const TIMEOUT_LIMIT = time.Minute
 const OUTPUT_DIR = "/app/output"
 const START_TIMEOUT = 30 * time.Second
 const TEXT_ELEMENTS = "title, h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote, pre, a"
+const MAX_REDIALS = 10
 
 var nonAlphaNumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
@@ -433,6 +435,21 @@ func requestTask(client *rpc.Client, workerAddr string) (*common.Task, error) {
 	return reply, nil
 }
 
+func requestNewReplica(coord *rpc.Client, sourceAddr string, failedReplica string) (string, error) {
+	args := &common.RequestNewReplicaArgs{
+		Original:      sourceAddr,
+		FailedReplica: failedReplica,
+	}
+	reply := &common.RequestNewReplicaReply{}
+
+	coord.Call("Coordinator.GetNewReplica", args, reply)
+	if reply.NewReplica == "" {
+		return "", errors.New("No new replica available")
+	}
+	return reply.NewReplica, nil
+
+}
+
 func reportTaskDone(task *common.Task, coord *rpc.Client, urls map[string]bool) error {
 	args := &common.ReportTaskArgs{
 		WorkerAddr: workerState.addr,
@@ -450,14 +467,19 @@ func reportTaskDone(task *common.Task, coord *rpc.Client, urls map[string]bool) 
 		return nil
 	}
 
+	replicas := append([]string{}, reply.ReplicaWorkerAddrs...)
 	// Send intermediate data replicas to assigned workers
-	for _, addr := range reply.ReplicaWorkerAddrs {
+	for i := 0; i < len(replicas); i++ {
+		addr := replicas[i]
 		fmt.Println("Writing replica to", addr)
-
 		client, err := rpc.Dial("tcp", addr)
 		if err != nil {
-			fmt.Println("replica dial failed:", addr, err)
-			continue // TODO: report task done again
+			fmt.Println("Replication failed, trying new worker...")
+			newAddr, err := requestNewReplica(coord, workerState.addr, addr)
+			if err == nil {
+				replicas = append(replicas, newAddr)
+			}
+			continue // Give up finding new replicas if request fails
 		}
 
 		args := &common.AcceptReplicaArgs{

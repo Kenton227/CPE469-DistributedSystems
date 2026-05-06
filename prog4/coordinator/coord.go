@@ -539,3 +539,37 @@ func (coord *Coordinator) GetIntermediateLocations(
 	}
 	return nil
 }
+
+func (coord *Coordinator) GetNewReplica(
+	args *common.RequestNewReplicaArgs,
+	reply *common.RequestNewReplicaReply,
+) error {
+	coord.mutex.Lock()
+	defer coord.mutex.Unlock()
+
+	holders := coord.mapReplicas[args.Original]
+
+	// Remove failed replica if present
+	idx := slices.Index(holders, args.FailedReplica)
+	if idx != -1 {
+		holders = slices.Delete(holders, idx, idx+1)
+		coord.mapReplicas[args.Original] = holders
+	}
+
+	// Filtering list of ineligible holders
+	ineligibleHolders := make(map[string]bool)
+	for _, addr := range holders {
+		ineligibleHolders[addr] = true
+	}
+	ineligibleHolders[args.FailedReplica] = true
+
+	// Find new replica
+	for addr := range coord.workers {
+		if !ineligibleHolders[addr] {
+			reply.NewReplica = addr
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no available worker for new replica of %s", args.Original)
+}
