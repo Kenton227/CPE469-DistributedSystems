@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -9,11 +10,10 @@ import (
 	"net/url"
 	"os"
 	"prog4/common"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
-	"strings"
-	"regexp"
-	"strconv"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -26,7 +26,7 @@ const TEXT_ELEMENTS = "title, h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote,
 var nonAlphaNumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 type WorkerRPC struct {
-	mutex       sync.Mutex
+	mutex sync.Mutex
 	// string is workerId, int is reduceIdTask, KeyValue is word -> URL
 	mapOutputs  map[string]map[int][]common.KeyValue
 	addr        string
@@ -80,6 +80,8 @@ func main() {
 			continue
 		}
 
+		workerState.currentTask = task
+
 		switch task.Type {
 		case common.Map:
 			urls, err := doMapTask(task)
@@ -117,6 +119,8 @@ func main() {
 }
 
 func (w *WorkerRPC) RecvHeartbeat(args *common.HeartbeatArgs, reply *common.HeartbeatReply) error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	id := -1
 	if w.currentTask != nil {
 		id = w.currentTask.Id
@@ -136,7 +140,7 @@ func startWorkerRPCServer() (string, error) {
 		return "", err
 	}
 
-	go func() { // Threaded listen for requests
+	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -147,15 +151,18 @@ func startWorkerRPCServer() (string, error) {
 		}
 	}()
 
-	host, err := os.Hostname()
-	if err != nil {
-		listener.Close()
-		return "", err
+	host := os.Getenv("WORKER_ADDR")
+	if host == "" {
+		host, err = os.Hostname()
+		if err != nil {
+			listener.Close()
+			return "", err
+		}
 	}
 
-	// Parse Worker
 	port := listener.Addr().(*net.TCPAddr).Port
 	addr := fmt.Sprintf("%s:%d", host, port)
+
 	fmt.Println("worker rpc listening at", addr)
 	return addr, nil
 }
@@ -214,7 +221,7 @@ func processDocText(doc *goquery.Document, mapTask *common.Task, url string) {
 				if token == "" {
 					continue
 				}
-				reduceId := idxHash(text) % mapTask.R
+				reduceId := idxHash(token) % mapTask.R
 				keyVal := common.KeyValue{Key: token, Value: url}
 				updateMapOutput(workerState.addr, reduceId, keyVal)
 			}
@@ -300,56 +307,52 @@ func doReduceTask(reduceTask *common.Task, coordClient *rpc.Client) error {
 		return err
 	}
 
-	fmt.Println(keyVals)
-
-	// make reduce map
-	reduceMap := make(map[string]int)
+	// Make reduce map
+	reduceMap := make(map[string]map[string]bool)
 	for _, keyVal := range keyVals {
-		val, err := strconv.Atoi(keyVal.Value)
-		if err != nil {
-			return err
+		if _, ok := reduceMap[keyVal.Key]; !ok {
+			reduceMap[keyVal.Key] = make(map[string]bool)
 		}
-		reduceMap[keyVal.Key] += val
+		reduceMap[keyVal.Key][keyVal.Value] = true
 	}
 
-	fmt.Println(reduceMap)
-	
-	// write output file for this reduce task
-	outputFilename := fmt.Sprintf("%s/mr-out-%d.txt", OUTPUT_DIR, reduceTask.Id)
+	// Convert URL sets to slices
+	final := make(map[string][]string)
+	for word, urlSet := range reduceMap {
+		for url := range urlSet {
+			final[word] = append(final[word], url)
+		}
+	}
 
-	// make directory and file
-	err = os.MkdirAll(OUTPUT_DIR, 0755)
-	if err != nil {
+	if err := os.MkdirAll(OUTPUT_DIR, 0755); err != nil {
 		return err
 	}
+
+	outputFilename := fmt.Sprintf("%s/mr-out-%d.json", OUTPUT_DIR, reduceTask.Id)
+
 	fptr, err := os.Create(outputFilename)
 	if err != nil {
 		return err
 	}
 	defer fptr.Close()
 
-	// write to file
-	for word, count := range reduceMap {
-		line := fmt.Sprintf("%s: %d\n", word, count)
-		_, err = fptr.WriteString(line)
-		if err != nil {
-			fptr.Close()
-			return err
-		}
-	}
+	encoder := json.NewEncoder(fptr)
+	encoder.SetIndent("", "  ")
 
-	return nil
+	return encoder.Encode(final)
 }
 
 // Called by reducer to retrieve all worker addresses from coord
-func getWorkerAddresses(coord *rpc.Client) []string {
-	args := &common.GetWorkerAddressesArgs{
+func getIntermediateDataLocations(coord *rpc.Client) []common.IntermediateLocation {
+
+	args := &common.GetIntermediateLocationsArgs{
 		RequestingWorkerAddr: workerState.addr,
 	}
-	reply := &common.GetWorkerAddressesReply{}
-	coord.Call("Coordinator.GetWorkerAddresses", args, reply)
+	reply := &common.GetIntermediateLocationsReply{}
 
-	return reply.WorkerAddresses
+	coord.Call("Coordinator.GetIntermediateLocations", args, reply)
+
+	return reply.Locations
 }
 
 /*
@@ -360,36 +363,61 @@ func fetchIntermediateValues(reduceTaskID int, coord *rpc.Client) ([]common.KeyV
 
 	var intermediatePairs []common.KeyValue
 
-	for _, workerAddr := range getWorkerAddresses(coord) {
-		fmt.Println("Requesting intermediate data from worker", workerAddr)
-		client, err := rpc.Dial("tcp", workerAddr)
+	for _, location := range getIntermediateDataLocations(coord) {
+		fmt.Println("Requesting intermediate", location.OwnerAddr, "data from", location.HolderAddr)
+		client, err := rpc.Dial("tcp", location.HolderAddr)
 		if err != nil {
 			return nil, err // TODO: Ask coord for replica data instead
 		}
 		defer client.Close()
 
 		args := &common.GetIntermediateValuesArgs{
+			OwnerAddr:    location.OwnerAddr,
 			ReduceTaskID: reduceTaskID,
 		}
 		reply := &common.GetIntermediateValuesReply{}
 
-		err = client.Call("Worker.getIntermediateValues", args, reply)
+		err = client.Call("Worker.GetIntermediateValues", args, reply)
 		if err != nil {
+			// Handle dead worker
 			return nil, err
 		}
 
 		intermediatePairs = append(intermediatePairs, reply.IntermediatePairs...)
+		// fmt.Println("Fetched", reply.IntermediatePairs, "from", workerAddr)
 	}
 
 	return intermediatePairs, nil
 }
 
-func (w *WorkerRPC) getIntermediateValues(
-	args common.GetIntermediateValuesArgs,
-	reply common.GetIntermediateValuesReply,
+func (w *WorkerRPC) GetIntermediateValues(
+	args *common.GetIntermediateValuesArgs,
+	reply *common.GetIntermediateValuesReply,
 ) error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	fmt.Println("Providing data for Reduce Task", args.ReduceTaskID)
-	reply.IntermediatePairs = w.mapOutputs[w.addr][args.ReduceTaskID]
+	reply.IntermediatePairs = w.mapOutputs[args.OwnerAddr][args.ReduceTaskID]
+	return nil
+}
+
+func (w *WorkerRPC) ReplicateIntermediateData(
+	args *common.ReplicateIntermediateDataArgs,
+	reply *common.ReplicateIntermediateDataReply,
+) error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	reply.Data = w.mapOutputs[args.FailedAddr]
+	return nil
+}
+
+func (w *WorkerRPC) DeleteFailedWorkerData(
+	args *common.DeleteFailedWorkerDataArgs,
+	reply *common.DeleteFailedWorkerDataReply,
+) error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	delete(w.mapOutputs, args.FailedAddr)
 	return nil
 }
 
@@ -418,34 +446,47 @@ func reportTaskDone(task *common.Task, coord *rpc.Client, urls map[string]bool) 
 		return err
 	}
 
-	// Send replicas to those workers
+	if task.Type != common.Map {
+		return nil
+	}
+
+	// Send intermediate data replicas to assigned workers
 	for _, addr := range reply.ReplicaWorkerAddrs {
-		println("Writing replica to", addr)
+		fmt.Println("Writing replica to", addr)
+
 		client, err := rpc.Dial("tcp", addr)
 		if err != nil {
-			return nil
+			fmt.Println("replica dial failed:", addr, err)
+			continue
 		}
-		defer client.Close()
 
 		args := &common.AcceptReplicaArgs{
 			WorkerAddr: workerState.addr,
-			MapOutput: make(map[int][]common.KeyValue),
+			MapOutput:  make(map[int][]common.KeyValue),
 		}
+
 		for i, pair := range workerState.mapOutputs[workerState.addr] {
 			args.MapOutput[i] = pair
 		}
-		reply := &common.AcceptReplicaReply{}
 
-		err = client.Call("Worker.AcceptReplica", args, reply)
+		replicaReply := &common.AcceptReplicaReply{}
+
+		err = client.Call("Worker.AcceptReplica", args, replicaReply)
+		client.Close()
+
 		if err != nil {
-			return nil // TODO: Maybe handle more gracefully?
+			fmt.Println("replica write failed:", addr, err)
+			continue
 		}
 	}
 
 	return nil
 }
 
-func (w *WorkerRPC) AcceptReplica(args common.AcceptReplicaArgs, reply common.AcceptReplicaReply) error {
+func (w *WorkerRPC) AcceptReplica(args *common.AcceptReplicaArgs, reply *common.AcceptReplicaReply) error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	workerState.mapOutputs[args.WorkerAddr] = args.MapOutput
+
 	return nil
 }

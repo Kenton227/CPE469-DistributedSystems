@@ -12,7 +12,7 @@ services:
     build:
       context: .
       dockerfile: dockerfile.worker
-    container_name: rpc-worker1
+    container_name: rpc-worker-1
     command: ["worker1"]
     ports:
       - "9001:1234"
@@ -20,12 +20,14 @@ services:
       - coordinator
     volumes:
       - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-1
 
   worker2:
     build:
       context: .
       dockerfile: dockerfile.worker
-    container_name: rpc-worker2
+    container_name: rpc-worker-2
     command: ["worker2"]
     ports:
       - "9002:1234"
@@ -33,12 +35,14 @@ services:
       - coordinator
     volumes:
       - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-2
 
   worker3:
     build:
       context: .
       dockerfile: dockerfile.worker
-    container_name: rpc-worker3
+    container_name: rpc-worker-3
     command: ["worker3"]
     ports:
       - "9003:1234"
@@ -46,36 +50,50 @@ services:
       - coordinator
     volumes:
       - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-3
 
   worker4:
     build:
       context: .
       dockerfile: dockerfile.worker
-    container_name: rpc-worker4
+    container_name: rpc-worker-4
     command: ["worker4"]
     ports:
       - "9004:1234"
     depends_on:
       - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-4
 
   worker5:
     build:
       context: .
       dockerfile: dockerfile.worker
-    container_name: rpc-worker5
+    container_name: rpc-worker-5
     command: ["worker5"]
     ports:
       - "9005:1234"
     depends_on:
       - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-5
 
   worker6:
     build:
       context: .
       dockerfile: dockerfile.worker
-    container_name: rpc-worker6
+    container_name: rpc-worker-6
     command: ["worker6"]
     ports:
       - "9006:1234"
     depends_on:
       - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-6

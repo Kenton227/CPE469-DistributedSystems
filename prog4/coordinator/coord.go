@@ -11,15 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"prog4/common"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 )
 
-const TASK_TIMEOUT = 10 * time.Second
+const TASK_TIMEOUT = 500 * time.Millisecond
 const HEARTBEAT_INTERVAL = 10 * time.Second
-const MAX_URLS = 2
-const START_DELAY = 100 * time.Millisecond
+const START_DELAY = 0 * time.Millisecond
 
 type phase int
 
@@ -44,7 +44,8 @@ type Coordinator struct {
 	rNum        int
 	startTime   time.Time
 
-	workers     map[string]*rpc.Client // registered workers
+	workers     map[string]*rpc.Client // alive registered workers
+	dataOwners  map[string]bool
 	mapReplicas map[string][]string
 }
 
@@ -133,6 +134,62 @@ func main() {
 	fmt.Println("Completed!")
 }
 
+func getIntermediateData(failedAddr string, replicateClient *rpc.Client) (map[int][]common.KeyValue, error) {
+	args := &common.ReplicateIntermediateDataArgs{}
+	args.FailedAddr = failedAddr
+	reply := &common.ReplicateIntermediateDataReply{}
+	err := replicateClient.Call("Worker.ReplicateIntermediateData", args, reply)
+	if err != nil {
+		return nil, err
+	}
+
+	return reply.Data, nil
+
+}
+
+func handleFailedWorker(coord *Coordinator, failedAddr string) {
+	delete(coord.workers, failedAddr)
+
+	// Remove failed worker from holders
+	holders := coord.mapReplicas[failedAddr]
+	aliveHolders := make([]string, 0)
+	for _, h := range holders {
+		if h != failedAddr {
+			if _, ok := coord.workers[h]; ok {
+				aliveHolders = append(aliveHolders, h)
+			}
+		}
+	}
+	coord.mapReplicas[failedAddr] = aliveHolders
+
+	// Re-replicate data
+	srcData, err := getIntermediateData(failedAddr, coord.workers[aliveHolders[0]])
+	if err != nil {
+		fmt.Println("failed to fetch replica data:", err)
+		return
+	}
+
+	for addr, client := range coord.workers {
+		if slices.Contains(coord.mapReplicas[failedAddr], addr) {
+			continue
+		}
+
+		args := &common.AcceptReplicaArgs{
+			WorkerAddr: failedAddr,
+			MapOutput:  srcData,
+		}
+		reply := &common.AcceptReplicaReply{}
+
+		if err := client.Call("Worker.AcceptReplica", args, reply); err != nil {
+			fmt.Println("failed to replicate to", addr, err)
+			continue
+		}
+
+		coord.mapReplicas[failedAddr] = append(coord.mapReplicas[failedAddr], addr)
+		break
+	}
+}
+
 func sendHeartbeats(coord *Coordinator) error {
 
 	// TODO: Add replica replication logic on heartbeat failure
@@ -143,6 +200,7 @@ func sendHeartbeats(coord *Coordinator) error {
 		err := client.Call("Worker.RecvHeartbeat", args, reply)
 		if err != nil {
 			fmt.Println("Heartbeat on", addr, ":", err)
+			go handleFailedWorker(coord, addr)
 			continue
 		}
 		fmt.Println(reply.WorkerAddr, " working on ", reply.TaskId)
@@ -170,7 +228,7 @@ func advancePhase(coord *Coordinator) {
 	case completed:
 		return
 	case mapPhase:
-		if len(coord.frontier.toVisit) > 0 {
+		if len(coord.mapTasks) < coord.mNum {
 			return
 		}
 		tasks = coord.mapTasks
@@ -192,24 +250,46 @@ func advancePhase(coord *Coordinator) {
 
 // Iteratively scan through coord.reduceTasks for the next task
 func getReduceTask(coord *Coordinator) *common.Task {
-	for _, reduceTask := range coord.reduceTasks {
-		if reduceTask.Status == common.Idle || (reduceTask.Status == common.InProgress && time.Since(reduceTask.StartTime) > TASK_TIMEOUT) {
+	for i := range coord.reduceTasks {
+		reduceTask := &coord.reduceTasks[i]
+
+		if reduceTask.Status == common.Idle ||
+			(reduceTask.Status == common.InProgress &&
+				time.Since(reduceTask.StartTime) > TASK_TIMEOUT) {
+
+			reduceTask.Status = common.InProgress
 			reduceTask.StartTime = time.Now()
-			return &reduceTask
+			return reduceTask
 		}
 	}
+
 	return nil
 }
 
 func getMapTask(coord *Coordinator) *common.Task {
 
+	// Check for any stray map tasks
+	for i := range coord.mapTasks {
+		task := &coord.mapTasks[i]
+		if task.Status != common.Completed && time.Since(task.StartTime) > TASK_TIMEOUT {
+			task.Status = common.InProgress
+			task.StartTime = time.Now()
+			return task
+		}
+	}
+
+	if len(coord.mapTasks) == coord.mNum {
+		return waitTask()
+	}
+
 	// Generate new map tasks if frontier is non-empty
-	if len(coord.frontier.toVisit) > 0 || len(coord.frontier.known) < MAX_URLS {
+	if len(coord.frontier.toVisit) > 0 {
 		frontierCutoff := min(common.BATCH_SIZE, len(coord.frontier.toVisit))
 		newTask := common.Task{
 			Type:      common.Map,
 			Id:        len(coord.mapTasks),
 			URLs:      coord.frontier.toVisit[:frontierCutoff],
+			KnownURLs: coord.frontier.known,
 			StartTime: time.Now(),
 			Status:    common.InProgress,
 			R:         coord.rNum,
@@ -217,17 +297,9 @@ func getMapTask(coord *Coordinator) *common.Task {
 		}
 		coord.frontier.toVisit = coord.frontier.toVisit[frontierCutoff:]
 		coord.mapTasks = append(coord.mapTasks, newTask)
-		return &newTask
+		return &coord.mapTasks[len(coord.mapTasks)-1]
 	}
 
-	// Check for any stray map tasks
-	for _, task := range coord.mapTasks {
-		if task.Status != common.Completed {
-			return &task
-		}
-	}
-
-	// Return wait if no stray tasks or no new tasks to generate
 	return waitTask()
 }
 
@@ -249,7 +321,12 @@ func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *commo
 
 	case reducePhase:
 		// fmt.Println("Reduce task requested")
-		newTask = *getReduceTask(coord)
+		task := getReduceTask(coord)
+		if task == nil {
+			newTask = *waitTask()
+		} else {
+			newTask = *task
+		}
 
 	case completed:
 		newTask = common.Task{
@@ -283,7 +360,7 @@ func (coord *Coordinator) RequestTask(args *common.RequestTaskArgs, reply *commo
 func chooseRandomReplicaWorkers(coord *Coordinator, sourceWorker string) (string, string, error) {
 
 	replica_candidates := make([]string, 0)
-	for addr, _ := range coord.workers {
+	for addr := range coord.workers {
 		if addr != sourceWorker {
 			replica_candidates = append(replica_candidates, addr)
 		}
@@ -300,6 +377,12 @@ func chooseRandomReplicaWorkers(coord *Coordinator, sourceWorker string) (string
 	return replica_candidates[0], replica_candidates[1], nil
 }
 
+func markFoundURLs(coord *Coordinator, newURLs map[string]bool) {
+	for url, _ := range newURLs {
+		coord.frontier.known[url] = true
+	}
+}
+
 func (coord *Coordinator) ReportTask(args *common.ReportTaskArgs, reply *common.ReportTaskReply) error {
 	coord.mutex.Lock()
 	defer coord.mutex.Unlock()
@@ -309,23 +392,30 @@ func (coord *Coordinator) ReportTask(args *common.ReportTaskArgs, reply *common.
 		if args.TaskID < 0 || args.TaskID >= len(coord.mapTasks) {
 			return fmt.Errorf("map task id %d out of range", args.TaskID)
 		}
+		markFoundURLs(coord, args.FoundUrls)
 		coord.mapTasks[args.TaskID].Status = common.Completed
 
+		// Tell workers who to send replicas to
+		replica1, replica2, err := chooseRandomReplicaWorkers(coord, args.WorkerAddr)
+		if err != nil {
+			return nil // TODO: Handle this differently? Right now, we just skip replication entirely
+		}
+		reply.ReplicaWorkerAddrs = append(reply.ReplicaWorkerAddrs, replica1, replica2)
+
+		// Record replicas
+		coord.mapReplicas[args.WorkerAddr] = append(
+			coord.mapReplicas[args.WorkerAddr], args.WorkerAddr, replica1, replica2,
+		)
+
+		// Mark it as an original data owner
+		coord.dataOwners[args.WorkerAddr] = true
+
 	case common.Reduce:
+		if args.TaskID < 0 || args.TaskID >= len(coord.reduceTasks) {
+			return fmt.Errorf("reduce task id %d out of range", args.TaskID)
+		}
 		coord.reduceTasks[args.TaskID].Status = common.Completed
 	}
-
-	// Tell workers who to send replicas to
-	replica1, replica2, err := chooseRandomReplicaWorkers(coord, args.WorkerAddr)
-	if err != nil {
-		return nil // TODO: Handle this differently? Right now, we just skip replication entirely
-	}
-	reply.ReplicaWorkerAddrs = append(reply.ReplicaWorkerAddrs, replica1, replica2)
-
-	// Record replicas
-	coord.mapReplicas[args.WorkerAddr] = append(
-		coord.mapReplicas[args.WorkerAddr], replica1, replica2,
-	)
 
 	return nil
 }
@@ -375,6 +465,7 @@ func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 		mNum:        M,
 		rNum:        R,
 		workers:     make(map[string]*rpc.Client),
+		dataOwners:  make(map[string]bool),
 		mapReplicas: make(map[string][]string),
 		frontier:    Frontier{toVisit: make([]string, 0), known: make(map[string]bool)},
 		startTime:   time.Now(),
@@ -427,16 +518,23 @@ func (coord *Coordinator) Done() bool {
 	return coord.phase == completed
 }
 
-func (coord *Coordinator) GetWorkerAddresses(
-	args common.GetWorkerAddressesArgs,
-	reply common.GetWorkerAddressesReply,
+func (coord *Coordinator) GetIntermediateLocations(
+	args *common.GetIntermediateLocationsArgs,
+	reply *common.GetIntermediateLocationsReply,
 ) error {
-	var addresses []string
-	for addr, _ := range coord.workers {
+	coord.mutex.Lock()
+	defer coord.mutex.Unlock()
+
+	for addr := range coord.dataOwners {
 		if addr == args.RequestingWorkerAddr {
 			continue
 		}
-		addresses = append(addresses, addr)
+		reply.Locations = append(
+			reply.Locations,
+			common.IntermediateLocation{
+				OwnerAddr:  addr,
+				HolderAddr: coord.mapReplicas[addr][0],
+			})
 	}
 	return nil
 }
