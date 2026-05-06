@@ -1,6 +1,8 @@
 package common
 
-import "time"
+import (
+	"time"
+)
 
 const BATCH_SIZE = 10 // 100
 
@@ -34,6 +36,7 @@ type Task struct {
 	Type      TaskType
 	Id        int
 	URLs      []string
+	KnownURLs map[string]bool
 	StartTime time.Time
 	Status    taskStatus
 	R         int
@@ -64,6 +67,7 @@ type RegisterWorkerArgs struct {
 type RegisterWorkerReply struct{}
 
 type GetIntermediateValuesArgs struct {
+	OwnerAddr    string
 	ReduceTaskID int
 }
 
@@ -71,12 +75,17 @@ type GetIntermediateValuesReply struct {
 	IntermediatePairs []KeyValue
 }
 
-type GetWorkerAddressesArgs struct {
+type IntermediateLocation struct {
+	OwnerAddr  string
+	HolderAddr string
+}
+
+type GetIntermediateLocationsArgs struct {
 	RequestingWorkerAddr string
 }
 
-type GetWorkerAddressesReply struct {
-	WorkerAddresses []string
+type GetIntermediateLocationsReply struct {
+	Locations []IntermediateLocation
 }
 
 type AcceptReplicaArgs struct {
@@ -85,3 +94,24 @@ type AcceptReplicaArgs struct {
 }
 
 type AcceptReplicaReply struct{}
+
+type ReplicateIntermediateDataArgs struct {
+	FailedAddr string
+}
+type ReplicateIntermediateDataReply struct {
+	Data map[int][]KeyValue
+}
+
+type DeleteFailedWorkerDataArgs struct {
+	FailedAddr string
+}
+type DeleteFailedWorkerDataReply struct{}
+
+type RequestNewReplicaArgs struct {
+	Original      string
+	FailedReplica string
+}
+
+type RequestNewReplicaReply struct {
+	NewReplica string
+}
