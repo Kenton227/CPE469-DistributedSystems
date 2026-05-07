@@ -1,6 +1,7 @@
 package common
 
 import (
+	"hash/fnv"
 	"time"
 )
 
@@ -67,7 +68,7 @@ type RegisterWorkerArgs struct {
 type RegisterWorkerReply struct{}
 
 type GetIntermediateValuesArgs struct {
-	OwnerAddr    string
+	// OwnerAddr    string
 	ReduceTaskID int
 }
 
@@ -85,21 +86,30 @@ type GetIntermediateLocationsArgs struct {
 }
 
 type GetIntermediateLocationsReply struct {
-	Locations []IntermediateLocation
+	HolderAddresses []string
+	// Locations  []IntermediateLocation
 }
 
+type ReplicaDataType int
+
+const (
+	IntermediateData ReplicaDataType = iota
+	OutputData
+)
+
 type AcceptReplicaArgs struct {
-	WorkerAddr string
-	MapOutput  map[int][]KeyValue
+	WorkerAddr   string
+	ReduceTaskID int
+	FinalOutput  map[string][]string
 }
 
 type AcceptReplicaReply struct{}
 
-type ReplicateIntermediateDataArgs struct {
-	FailedAddr string
+type ReplicateDataArgs struct {
+	ReduceTaskID int
 }
-type ReplicateIntermediateDataReply struct {
-	Data map[int][]KeyValue
+type ReplicateDataReply struct {
+	Data map[string][]string
 }
 
 type DeleteFailedWorkerDataArgs struct {
@@ -114,4 +124,31 @@ type RequestNewReplicaArgs struct {
 
 type RequestNewReplicaReply struct {
 	NewReplica string
+}
+
+type SearchQueryArgs struct {
+	Keyword string
+}
+
+type SearchQueryReply struct {
+	HolderAddr string
+}
+
+type MapRecomputeArgs struct {
+	Task Task
+}
+
+type MapRecomputeReply struct{}
+
+type NotifyFailureArgs struct {
+	FailedAddr string
+}
+
+type NotifyFailureReply struct{}
+
+func IdxHash(word string, R int) int {
+	hash32 := fnv.New32a()
+	hash32.Write([]byte(word))
+	posHash := int(hash32.Sum32() & 0x7fffffff)
+	return posHash % R
 }
