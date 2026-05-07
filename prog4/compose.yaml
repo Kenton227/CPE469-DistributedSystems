@@ -7,6 +7,8 @@ services:
     container_name: rpc-coordinator
     ports:
       - "9000:1234"
+    volumes:
+      - ./logs:/app/logs
 
   worker1:
     build:
@@ -97,3 +99,14 @@ services:
       - ./outputs:/app/output
     environment:
       - WORKER_ADDR=rpc-worker-6
+  
+  searcher:
+    build:
+      context: .
+      dockerfile: dockerfile.searcher
+    container_name: searcher
+    command: ["${P}"]
+    ports:
+      - "9007:1234"
+    depends_on:
+      - coordinator
