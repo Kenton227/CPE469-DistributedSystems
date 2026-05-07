@@ -21,7 +21,6 @@ import (
 const TASK_TIMEOUT = 500 * time.Millisecond
 const HEARTBEAT_INTERVAL = 10 * time.Second
 const START_DELAY = 0 * time.Millisecond
-const DEFAULT_BATCH_SIZE = 10
 
 type logType int
 
@@ -81,11 +80,11 @@ func waitTask() *common.Task {
 func getBatchSizeFromEnv() int {
 	raw := strings.TrimSpace(os.Getenv("BATCH_SIZE"))
 	if raw == "" {
-		return DEFAULT_BATCH_SIZE
+		panic("BATCH_SIZE must be set to a positive integer")
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil || v <= 0 {
-		return DEFAULT_BATCH_SIZE
+		panic("BATCH_SIZE must be a positive integer")
 	}
 	return v
 }
