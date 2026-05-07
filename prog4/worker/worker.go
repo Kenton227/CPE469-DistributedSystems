@@ -33,12 +33,14 @@ type WorkerRPC struct {
 	addr          string
 	currentTask   *common.Task
 	reduceOutputs map[int]map[string][]string
+	searchOutputs map[string][]string
 	coord         *rpc.Client
 }
 
 var workerState = &WorkerRPC{
 	mapOutputs:    make(map[int][]common.KeyValue),
 	reduceOutputs: make(map[int]map[string][]string),
+	searchOutputs: make(map[string][]string),
 }
 
 func registerToCoord(workerAddr string) (*rpc.Client, error) {
@@ -341,6 +343,10 @@ func doReduceTask(reduceTask *common.Task, coordClient *rpc.Client) error {
 
 	workerState.reduceOutputs[reduceTask.Id] = final
 
+	for word, urls := range final {
+		workerState.searchOutputs[word] = append([]string{}, urls...)
+	}
+
 	if err := os.MkdirAll(OUTPUT_DIR, 0755); err != nil {
 		return err
 	}
@@ -540,11 +546,25 @@ func (w *WorkerRPC) AcceptReplica(args *common.AcceptReplicaArgs, reply *common.
 	// Write a version of the final output file
 	workerState.reduceOutputs[args.ReduceTaskID] = args.FinalOutput
 
+	for word, urls := range args.FinalOutput {
+		workerState.searchOutputs[word] = append([]string{}, urls...)
+	}
+
 	return nil
 }
 
-func handleSearchQuery() {
+func (w *WorkerRPC) HandleSearch(args *common.WorkerSearchArgs, reply *common.WorkerSearchReply) error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 
+	keyword := strings.TrimSpace(strings.ToLower(args.Keyword))
+	if keyword == "" {
+		return errors.New("empty search keyword")
+	}
+
+	urls := w.searchOutputs[keyword]
+	reply.URLs = append([]string{}, urls...)
+	return nil
 }
 
 func (w *WorkerRPC) MapRecompute(
