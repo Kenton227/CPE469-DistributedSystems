@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const TASK_TIMEOUT = 500 * time.Millisecond
+const TASK_TIMEOUT = 1000 * time.Millisecond
 const HEARTBEAT_INTERVAL = 10 * time.Second
 const START_DELAY = 0 * time.Millisecond
 
@@ -48,22 +48,24 @@ type Frontier struct {
 }
 
 type Coordinator struct {
-	mutex       sync.Mutex
-	phase       phase
-	frontier    Frontier
-	mapTasks    []common.Task
-	reduceTasks []common.Task
-	mNum        int
-	rNum        int
-	batchSize   int
-	startTime   time.Time
+	mutex        sync.Mutex
+	phase        phase
+	frontier     Frontier
+	mapTasks     []common.Task
+	reduceTasks  []common.Task
+	mNum         int
+	rNum         int
+	batchSize    int
+	startTime    time.Time
+	timeToMap    time.Duration
+	timeToReduce time.Duration
 
-	workers      map[string]*rpc.Client // alive registered workers
-	dataOwners   map[string]bool
-	mapReplicas  map[string][]string
-	mapOwners    map[int]string
-	reduceOwners map[int][]string
-	searchIndex  map[string]string
+	workers        map[string]*rpc.Client // alive registered workers
+	dataOwners     map[string]bool
+	mapReplicas    map[string][]string
+	mapOwners      map[int]string
+	reduceOwners   map[int][]string
+	searchIndex    map[string]string
 	runtimeWritten bool
 }
 
@@ -299,12 +301,9 @@ func advancePhase(coord *Coordinator) {
 		}
 	}
 	if allCompleted {
+		writeRuntime(coord)
 		coord.phase += 1
 		fmt.Println("Advanced phase to", coord.phase)
-		if coord.phase == completed && !coord.runtimeWritten {
-			writeRuntime(time.Since(coord.startTime))
-			coord.runtimeWritten = true
-		}
 	}
 }
 
@@ -447,6 +446,10 @@ func chooseRandomReplicaWorkers(coord *Coordinator, sourceWorker string) (string
 
 func markFoundURLs(coord *Coordinator, newURLs map[string]bool) {
 	for url, _ := range newURLs {
+		_, ok := coord.frontier.known[url]
+		if ok {
+			coord.frontier.toVisit = append(coord.frontier.toVisit, url)
+		}
 		coord.frontier.known[url] = true
 	}
 }
@@ -727,19 +730,26 @@ func (coord *Coordinator) NotifyFailure(
 	return nil
 }
 
-
-func writeRuntime(d time.Duration) {
+func writeRuntime(coord *Coordinator) {
 	if err := os.MkdirAll("/app/logs", 0755); err != nil {
 		return
 	}
-	f, err := os.OpenFile("/app/logs/runtime.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err := os.OpenFile("/app/logs/runtime.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString(fmt.Sprintf("TOTAL_RUNTIME_SECONDS %.3f\n", d.Seconds()))
-}
+	switch coord.phase {
+	case mapPhase:
+		coord.timeToMap = time.Since(coord.startTime)
+		_, _ = f.WriteString(fmt.Sprintf("MAP TIME: %.3f\n", coord.timeToMap.Seconds()))
+	case reducePhase:
+		coord.timeToReduce = time.Since(coord.startTime.Add(coord.timeToMap))
+		_, _ = f.WriteString(fmt.Sprintf("REDUCE TIME: %.3f\n", coord.timeToReduce.Seconds()))
+		_, _ = f.WriteString(fmt.Sprintf("TOTAL RUNTIME: %.3f\n", time.Since(coord.startTime).Seconds()))
+	}
 
+}
 
 func (coord *Coordinator) buildSearchIndex() {
 	coord.searchIndex = make(map[string]string)

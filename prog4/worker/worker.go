@@ -254,7 +254,8 @@ func processDocLinksSafe(doc *goquery.Document, mapTask *common.Task, pageURL st
 		}
 
 		link = resolveLink(pageURL, strings.TrimSpace(link))
-		if link != "" && isValidHTTP(link) {
+		_, known := mapTask.KnownURLs[link]
+		if link != "" && isValidHTTP(link) && !known {
 			mu.Lock()
 			urls[link] = true
 			mu.Unlock()
