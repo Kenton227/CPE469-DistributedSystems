@@ -16,8 +16,8 @@ const coordinatorAddr = "coordinator:1234"
 const keywordFile = "/app/search_keywords.txt"
 
 type threadStats struct {
-	requests int
-	success  int
+	requests  int
+	success   int
 	latencyNs int64
 }
 

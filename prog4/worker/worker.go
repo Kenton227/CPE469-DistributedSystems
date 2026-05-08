@@ -23,13 +23,13 @@ const OUTPUT_DIR = "/app/output"
 const START_TIMEOUT = 30 * time.Second
 const TEXT_ELEMENTS = "title, h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote, pre, a"
 const MAX_REDIALS = 10
+const INTERMEDIATE_DIR = "/app/intermediate"
 
 var nonAlphaNumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
 type WorkerRPC struct {
 	mutex sync.Mutex
 	// int is reduceIdTask, KeyValue is word -> URL
-	mapOutputs    map[int][]common.KeyValue
 	addr          string
 	currentTask   *common.Task
 	reduceOutputs map[int]map[string][]string
@@ -38,7 +38,6 @@ type WorkerRPC struct {
 }
 
 var workerState = &WorkerRPC{
-	mapOutputs:    make(map[int][]common.KeyValue),
 	reduceOutputs: make(map[int]map[string][]string),
 	searchOutputs: make(map[string][]string),
 }
@@ -240,7 +239,9 @@ func processDocText(doc *goquery.Document, mapTask *common.Task, url string) {
 				}
 				reduceId := common.IdxHash(token, mapTask.R)
 				keyVal := common.KeyValue{Key: token, Value: url}
-				updateMapOutput(reduceId, keyVal)
+				if err := updateMapOutput(mapTask.Id, reduceId, keyVal); err != nil {
+					fmt.Println("updateMapOutput:", err)
+				}
 			}
 		},
 	)
@@ -254,7 +255,8 @@ func processDocLinksSafe(doc *goquery.Document, mapTask *common.Task, pageURL st
 		}
 
 		link = resolveLink(pageURL, strings.TrimSpace(link))
-		if link != "" && isValidHTTP(link) {
+		_, known := mapTask.KnownURLs[link]
+		if link != "" && isValidHTTP(link) && !known {
 			mu.Lock()
 			urls[link] = true
 			mu.Unlock()
@@ -284,11 +286,24 @@ func resolveLink(baseUrl string, link string) string {
 	return parsedBase.ResolveReference(parsedLink).String()
 }
 
-func updateMapOutput(reduceId int, intermediatePair common.KeyValue) {
+func updateMapOutput(mapTaskId int, reduceId int, intermediatePair common.KeyValue) error {
 	workerState.mutex.Lock()
 	defer workerState.mutex.Unlock()
 
-	workerState.mapOutputs[reduceId] = append(workerState.mapOutputs[reduceId], intermediatePair)
+	if err := os.MkdirAll(INTERMEDIATE_DIR, 0755); err != nil {
+		return err
+	}
+
+	filename := fmt.Sprintf("%s/mr-%d-%d.jsonl", INTERMEDIATE_DIR, mapTaskId, reduceId)
+
+	fptr, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer fptr.Close()
+
+	encoder := json.NewEncoder(fptr)
+	return encoder.Encode(intermediatePair)
 }
 
 func readByteRange(filename string, start int, end int) ([]byte, error) {
@@ -393,6 +408,52 @@ func handleFailedFetch(failedAddr string) {
 	}
 }
 
+func readIntermediateValues(reduceId int) ([]common.KeyValue, error) {
+	var pairs []common.KeyValue
+
+	entries, err := os.ReadDir(INTERMEDIATE_DIR)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return pairs, nil
+		}
+		return nil, err
+	}
+
+	suffix := fmt.Sprintf("-%d.jsonl", reduceId)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+
+		filename := fmt.Sprintf("%s/%s", INTERMEDIATE_DIR, name)
+
+		fptr, err := os.Open(filename)
+		if err != nil {
+			return nil, err
+		}
+
+		decoder := json.NewDecoder(fptr)
+		for decoder.More() {
+			var pair common.KeyValue
+			if err := decoder.Decode(&pair); err != nil {
+				fptr.Close()
+				return nil, err
+			}
+			pairs = append(pairs, pair)
+		}
+
+		fptr.Close()
+	}
+
+	return pairs, nil
+}
+
 /*
 Called by the reducer to retrieve associated intermediate values
 Iterates through all registered workers and fetches corresponding map-outputs to ReduceTaskID
@@ -438,7 +499,13 @@ func (w *WorkerRPC) GetIntermediateValues(
 ) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	reply.IntermediatePairs = w.mapOutputs[args.ReduceTaskID]
+
+	pairs, err := readIntermediateValues(args.ReduceTaskID)
+	if err != nil {
+		return err
+	}
+
+	reply.IntermediatePairs = pairs
 	return nil
 }
 
