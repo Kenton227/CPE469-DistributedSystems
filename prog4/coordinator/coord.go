@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const TASK_TIMEOUT = 10000 * time.Millisecond
+const TASK_TIMEOUT = 30000 * time.Millisecond
 const HEARTBEAT_INTERVAL = 10 * time.Second
 const START_DELAY = 0 * time.Millisecond
 
@@ -725,7 +725,7 @@ func (coord *Coordinator) NotifyFailure(
 	coord.mutex.Lock()
 	defer coord.mutex.Unlock()
 
-	recomputeMap(coord, args.FailedAddr)
+	handleFailedWorker(coord, args.FailedAddr)
 
 	return nil
 }
