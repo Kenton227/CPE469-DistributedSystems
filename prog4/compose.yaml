@@ -9,6 +9,8 @@ services:
       - "9000:1234"
     volumes:
       - ./logs:/app/logs
+    environment:
+      - BATCH_SIZE=${BATCH_SIZE}
 
   worker1:
     build:
@@ -106,6 +108,10 @@ services:
       dockerfile: dockerfile.searcher
     container_name: searcher
     command: ["${P}"]
+    environment:
+      - SEARCH_OUTPUT_MODE=${SEARCH_OUTPUT_MODE}
+    volumes:
+      - ./search_keywords.txt:/app/search_keywords.txt
     ports:
       - "9007:1234"
     depends_on:

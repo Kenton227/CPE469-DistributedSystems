@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-const BATCH_SIZE = 10 // 100
-
 type TaskType int
 
 const (
@@ -68,7 +66,6 @@ type RegisterWorkerArgs struct {
 type RegisterWorkerReply struct{}
 
 type GetIntermediateValuesArgs struct {
-	// OwnerAddr    string
 	ReduceTaskID int
 }
 
@@ -87,7 +84,6 @@ type GetIntermediateLocationsArgs struct {
 
 type GetIntermediateLocationsReply struct {
 	HolderAddresses []string
-	// Locations  []IntermediateLocation
 }
 
 type ReplicaDataType int
@@ -132,6 +128,14 @@ type SearchQueryArgs struct {
 
 type SearchQueryReply struct {
 	HolderAddr string
+}
+
+type WorkerSearchArgs struct {
+	Keyword string
+}
+
+type WorkerSearchReply struct {
+	URLs []string
 }
 
 type MapRecomputeArgs struct {

@@ -13,6 +13,7 @@ import (
 	"prog4/common"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -54,6 +55,7 @@ type Coordinator struct {
 	reduceTasks []common.Task
 	mNum        int
 	rNum        int
+	batchSize   int
 	startTime   time.Time
 
 	workers      map[string]*rpc.Client // alive registered workers
@@ -61,6 +63,8 @@ type Coordinator struct {
 	mapReplicas  map[string][]string
 	mapOwners    map[int]string
 	reduceOwners map[int][]string
+	searchIndex  map[string]string
+	runtimeWritten bool
 }
 
 func waitTask() *common.Task {
@@ -71,6 +75,18 @@ func waitTask() *common.Task {
 		StartTime: time.Now(),
 		Status:    common.Completed,
 	}
+}
+
+func getBatchSizeFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv("BATCH_SIZE"))
+	if raw == "" {
+		panic("BATCH_SIZE must be set to a positive integer")
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		panic("BATCH_SIZE must be a positive integer")
+	}
+	return v
 }
 
 func validArgs(args []string) (int, int, string) {
@@ -213,7 +229,7 @@ func handleFailedWorker(coord *Coordinator, failedAddr string) {
 			}
 
 			coord.reduceOwners[id] = append(coord.reduceOwners[id], addr)
-			log(Replicate, failedAddr, addr)
+			log(Replicate, fmt.Sprintf("mr-out-%d.json", id), addr)
 			break
 		}
 	}
@@ -285,6 +301,10 @@ func advancePhase(coord *Coordinator) {
 	if allCompleted {
 		coord.phase += 1
 		fmt.Println("Advanced phase to", coord.phase)
+		if coord.phase == completed && !coord.runtimeWritten {
+			writeRuntime(time.Since(coord.startTime))
+			coord.runtimeWritten = true
+		}
 	}
 }
 
@@ -325,7 +345,7 @@ func getMapTask(coord *Coordinator, workerAddr string) *common.Task {
 
 	// Generate new map tasks if frontier is non-empty
 	if len(coord.frontier.toVisit) > 0 {
-		frontierCutoff := min(common.BATCH_SIZE, len(coord.frontier.toVisit))
+		frontierCutoff := min(coord.batchSize, len(coord.frontier.toVisit))
 		knownCopy := make(map[string]bool, len(coord.frontier.known))
 		for u, v := range coord.frontier.known {
 			knownCopy[u] = v
@@ -463,8 +483,9 @@ func (coord *Coordinator) ReportTask(args *common.ReportTaskArgs, reply *common.
 			[]string{}, args.WorkerAddr, replica1, replica2,
 		)
 
-		log(Replicate, args.WorkerAddr, replica1)
-		log(Replicate, args.WorkerAddr, replica2)
+		fileName := fmt.Sprintf("mr-out-%d.json", args.TaskID)
+		log(Replicate, fileName, replica1)
+		log(Replicate, fileName, replica2)
 
 	}
 
@@ -515,11 +536,13 @@ func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 		phase:        mapPhase,
 		mNum:         M,
 		rNum:         R,
+		batchSize:    getBatchSizeFromEnv(),
 		workers:      make(map[string]*rpc.Client),
 		frontier:     Frontier{toVisit: make([]string, 0), known: make(map[string]bool)},
 		startTime:    time.Now(),
 		mapOwners:    make(map[int]string),
 		reduceOwners: make(map[int][]string),
+		searchIndex:  make(map[string]string),
 	}
 
 	if err := rpc.RegisterName("Coordinator", coord); err != nil {
@@ -527,7 +550,9 @@ func StartCoordinator(M int, R int, inputFile string) (*Coordinator, error) {
 	}
 
 	// Load seed URLS into frontier
-	loadSeedURLs(coord, inputFile)
+	if err := loadSeedURLs(coord, inputFile); err != nil {
+		return nil, err
+	}
 
 	// Init Reduce Tasks
 	for i := 0; i < R; i++ {
@@ -553,7 +578,7 @@ func rpcListen(coord *Coordinator) {
 
 	fmt.Println("Coordinator is ready and waiting for connections on port 1234")
 
-	for !coord.Done() {
+	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("connection error:", err)
@@ -649,8 +674,8 @@ func log(event logType, arg1 any, arg2 any) {
 		reduceTaskID, workerAddr := arg1, arg2
 		message = fmt.Sprintf("ASSIGN REDUCE TASK %d TO WORKER %s\n", reduceTaskID, workerAddr)
 	case Replicate:
-		srcAddr, destAddr := arg1, arg2
-		message = fmt.Sprintf("REPLICATE %s TO WORKER %s\n", srcAddr, destAddr)
+		fileName, destAddr := arg1, arg2
+		message = fmt.Sprintf("REPLICATE %s ON WORKER %s\n", fileName, destAddr)
 	case Search:
 		keyword, workerAddr := arg1, arg2
 		message = fmt.Sprintf("ASSIGN SEARCH %s TO WORKER %s\n", keyword, workerAddr)
@@ -673,15 +698,18 @@ func log(event logType, arg1 any, arg2 any) {
 // }
 
 func recomputeMap(coord *Coordinator, failedAddr string) {
+	hadAffectedMapTasks := false
+
 	// Mark all associated map tasks as incomplete
 	for i, addr := range coord.mapOwners {
 		if addr == failedAddr {
+			hadAffectedMapTasks = true
 			coord.mapTasks[i].Status = common.Idle
 		}
 	}
 
-	// Rewind phase
-	if coord.phase != completed {
+	// Rewind only if this failure invalidates map outputs
+	if hadAffectedMapTasks && coord.phase != completed {
 		coord.phase = mapPhase
 	}
 }
@@ -696,5 +724,86 @@ func (coord *Coordinator) NotifyFailure(
 
 	recomputeMap(coord, args.FailedAddr)
 
+	return nil
+}
+
+
+func writeRuntime(d time.Duration) {
+	if err := os.MkdirAll("/app/logs", 0755); err != nil {
+		return
+	}
+	f, err := os.OpenFile("/app/logs/runtime.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(fmt.Sprintf("TOTAL_RUNTIME_SECONDS %.3f\n", d.Seconds()))
+}
+
+
+func (coord *Coordinator) buildSearchIndex() {
+	coord.searchIndex = make(map[string]string)
+
+	for taskID, holders := range coord.reduceOwners {
+		if len(holders) == 0 {
+			continue
+		}
+
+		var data map[string][]string
+		for _, addr := range holders {
+			client, ok := coord.workers[addr]
+			if !ok {
+				continue
+			}
+
+			args := &common.ReplicateDataArgs{ReduceTaskID: taskID}
+			reply := &common.ReplicateDataReply{}
+			if err := client.Call("Worker.ReplicateFinalData", args, reply); err == nil && reply.Data != nil {
+				data = reply.Data
+				break
+			}
+		}
+
+		if data == nil {
+			continue
+		}
+
+		for keyword := range data {
+			coord.searchIndex[keyword] = holders[0]
+		}
+	}
+}
+
+func (coord *Coordinator) HandleSearchQuery(
+	args *common.SearchQueryArgs,
+	reply *common.SearchQueryReply,
+) error {
+	coord.mutex.Lock()
+	defer coord.mutex.Unlock()
+
+	keyword := strings.TrimSpace(strings.ToLower(args.Keyword))
+	if keyword == "" {
+		return errors.New("empty search keyword")
+	}
+
+	if coord.phase != completed {
+		return errors.New("search unavailable until reduce phase is complete")
+	}
+
+	if len(coord.searchIndex) == 0 {
+		coord.buildSearchIndex()
+	}
+
+	workerAddr := coord.searchIndex[keyword]
+	if workerAddr == "" {
+		return fmt.Errorf("keyword %q not found", keyword)
+	}
+
+	if _, ok := coord.workers[workerAddr]; !ok {
+		return fmt.Errorf("assigned worker unavailable for keyword %q", keyword)
+	}
+
+	reply.HolderAddr = workerAddr
+	log(Search, keyword, workerAddr)
 	return nil
 }
