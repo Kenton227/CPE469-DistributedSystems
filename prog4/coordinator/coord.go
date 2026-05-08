@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const TASK_TIMEOUT = 1000 * time.Millisecond
+const TASK_TIMEOUT = 10000 * time.Millisecond
 const HEARTBEAT_INTERVAL = 10 * time.Second
 const START_DELAY = 0 * time.Millisecond
 

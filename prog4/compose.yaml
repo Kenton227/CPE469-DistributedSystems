@@ -72,35 +72,65 @@ services:
     environment:
       - WORKER_ADDR=rpc-worker-4
 
-  # worker5:
-  #   build:
-  #     context: .
-  #     dockerfile: dockerfile.worker
-  #   container_name: rpc-worker-5
-  #   command: ["worker5"]
-  #   ports:
-  #     - "9005:1234"
-  #   depends_on:
-  #     - coordinator
-  #   volumes:
-  #     - ./outputs:/app/output
-  #   environment:
-  #     - WORKER_ADDR=rpc-worker-5
+  worker5:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-5
+    command: ["worker5"]
+    ports:
+      - "9005:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-5
 
-  # worker6:
-  #   build:
-  #     context: .
-  #     dockerfile: dockerfile.worker
-  #   container_name: rpc-worker-6
-  #   command: ["worker6"]
-  #   ports:
-  #     - "9006:1234"
-  #   depends_on:
-  #     - coordinator
-  #   volumes:
-  #     - ./outputs:/app/output
-  #   environment:
-  #     - WORKER_ADDR=rpc-worker-6
+  worker6:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-6
+    command: ["worker6"]
+    ports:
+      - "9006:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-6
+
+  worker7:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-7
+    command: ["worker7"]
+    ports:
+      - "9007:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-7
+
+  worker8:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-8
+    command: ["worker8"]
+    ports:
+      - "9008:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-8
   
   # searcher:
   #   build:
@@ -113,6 +143,6 @@ services:
   #   volumes:
   #     - ./search_keywords.txt:/app/search_keywords.txt
   #   ports:
-  #     - "9007:1234"
+  #     - "9009:1234"
   #   depends_on:
   #     - coordinator
