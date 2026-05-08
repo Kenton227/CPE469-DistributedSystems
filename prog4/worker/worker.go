@@ -86,7 +86,9 @@ func main() {
 			continue
 		}
 
+		workerState.mutex.Lock()
 		workerState.currentTask = task
+		workerState.mutex.Unlock()
 
 		switch task.Type {
 		case common.Map:
@@ -356,11 +358,13 @@ func doReduceTask(reduceTask *common.Task, coordClient *rpc.Client) error {
 		}
 	}
 
+	workerState.mutex.Lock()
 	workerState.reduceOutputs[reduceTask.Id] = final
 
 	for word, urls := range final {
 		workerState.searchOutputs[word] = append([]string{}, urls...)
 	}
+	workerState.mutex.Unlock()
 
 	if err := os.MkdirAll(OUTPUT_DIR, 0755); err != nil {
 		return err
@@ -515,7 +519,13 @@ func (w *WorkerRPC) ReplicateFinalData(
 ) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	reply.Data = w.reduceOutputs[args.ReduceTaskID]
+
+	data := make(map[string][]string)
+	for k, v := range w.reduceOutputs[args.ReduceTaskID] {
+		data[k] = append([]string{}, v...)
+	}
+
+	reply.Data = data
 	return nil
 }
 
@@ -572,10 +582,16 @@ func reportTaskDone(task *common.Task, coord *rpc.Client, urls map[string]bool) 
 	if task.Type == common.Reduce {
 
 		replicas := append([]string{}, reply.ReplicaWorkerAddrs...)
-		// Send intermediate data replicas to assigned workers
+		workerState.mutex.Lock()
+		finalOutput := make(map[string][]string)
+		for k, v := range workerState.reduceOutputs[task.Id] {
+			finalOutput[k] = append([]string{}, v...)
+		}
+		workerState.mutex.Unlock()
+
 		args := &common.AcceptReplicaArgs{
 			WorkerAddr:   workerState.addr,
-			FinalOutput:  workerState.reduceOutputs[task.Id],
+			FinalOutput:  finalOutput,
 			ReduceTaskID: task.Id,
 		}
 		replicaReply := &common.AcceptReplicaReply{}
