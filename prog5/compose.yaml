@@ -1,0 +1,86 @@
+services:
+  coordinator:
+    build:
+      context: .
+      dockerfile: dockerfile.coordinator
+    command: ["./coordinator", "${M}", "${R}", "${INPUT_FILE}"]
+    container_name: rpc-coordinator
+    ports:
+      - "9000:1234"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - BATCH_SIZE=${BATCH_SIZE}
+
+  worker1:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-1
+    command: ["worker1"]
+    ports:
+      - "9001:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-1
+
+  worker2:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-2
+    command: ["worker2"]
+    ports:
+      - "9002:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-2
+
+  worker3:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-3
+    command: ["worker3"]
+    ports:
+      - "9003:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-3
+
+  worker4:
+    build:
+      context: .
+      dockerfile: dockerfile.worker
+    container_name: rpc-worker-4
+    command: ["worker4"]
+    ports:
+      - "9004:1234"
+    depends_on:
+      - coordinator
+    volumes:
+      - ./outputs:/app/output
+    environment:
+      - WORKER_ADDR=rpc-worker-4
+
+  searcher:
+    build:
+      context: .
+      dockerfile: dockerfile.searcher
+    container_name: searcher
+    command: ["${P}"]
+    environment:
+      - SEARCH_OUTPUT_MODE=${SEARCH_OUTPUT_MODE}
+    volumes:
+      - ./search_keywords.txt:/app/search_keywords.txt
+    ports:
+      - "9009:1234"
