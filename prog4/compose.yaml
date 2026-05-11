@@ -84,5 +84,3 @@ services:
       - ./search_keywords.txt:/app/search_keywords.txt
     ports:
       - "9009:1234"
-    depends_on:
-      - coordinator
