@@ -72,17 +72,17 @@ services:
     environment:
       - WORKER_ADDR=rpc-worker-4
 
-  # searcher:
-  #   build:
-  #     context: .
-  #     dockerfile: dockerfile.searcher
-  #   container_name: searcher
-  #   command: ["${P}"]
-  #   environment:
-  #     - SEARCH_OUTPUT_MODE=${SEARCH_OUTPUT_MODE}
-  #   volumes:
-  #     - ./search_keywords.txt:/app/search_keywords.txt
-  #   ports:
-  #     - "9009:1234"
-  #   depends_on:
-  #     - coordinator
+  searcher:
+    build:
+      context: .
+      dockerfile: dockerfile.searcher
+    container_name: searcher
+    command: ["${P}"]
+    environment:
+      - SEARCH_OUTPUT_MODE=${SEARCH_OUTPUT_MODE}
+    volumes:
+      - ./search_keywords.txt:/app/search_keywords.txt
+    ports:
+      - "9009:1234"
+    depends_on:
+      - coordinator
