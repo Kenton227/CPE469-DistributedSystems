@@ -8,5 +8,23 @@
 - in the root directory, create the database with :
 
 ```
-> sqlite3 db/bank.db < db/schema.sql
+sqlite3 db/bank.db < db/schema.sql
+```
+
+- run the bank server with:
+
+```
+go run server/server.go
+```
+
+- run the teller client with:
+
+```
+go run client/teller/teller.go
+```
+
+- run the customer client with:
+
+```
+go run client/customer/customer.go
 ```

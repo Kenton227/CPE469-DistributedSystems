@@ -65,7 +65,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer listener.Close()
-	fmt.Printf("Bank server is ready and waiting for connections on %s\n", ipPort)
+	fmt.Printf("Bank server is ready and waiting for connections on %s...\n", ipPort)
 
 	for {
 		conn, err := listener.Accept()
@@ -73,6 +73,7 @@ func main() {
 			fmt.Println(err)
 			continue
 		}
+		fmt.Println("Received connection")
 		go rpc.ServeConn(conn)
 	}
 }
@@ -82,6 +83,7 @@ func (bank *Bank) GetAccountID(req common.GetIDRequest, reply *common.GetIDReply
 	defer bank.mutex.Unlock()
 
 	var accountID int64
+
 	err := bank.db.QueryRow("SELECT account_id FROM accounts WHERE username = ?", req.Username).Scan(&accountID)
 	if err == sql.ErrNoRows {
 		reply.OK = false
@@ -121,7 +123,7 @@ func (bank *Bank) OpenAccount(req common.TellerRequest, reply *common.TellerRepl
 	)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("open failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -166,7 +168,7 @@ func (bank *Bank) CloseAccount(req common.TellerRequest, reply *common.TellerRep
 	deleteResult, err := tx.Exec("DELETE FROM accounts WHERE account_id = ?", req.TargetAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("close failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -207,7 +209,7 @@ func (bank *Bank) FreezeAccount(req common.TellerRequest, reply *common.TellerRe
 	res, err := tx.Exec("UPDATE accounts SET status = ? WHERE account_id = ?", StatusFrozen, req.TargetAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("freeze failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -248,7 +250,7 @@ func (bank *Bank) UnfreezeAccount(req common.TellerRequest, reply *common.Teller
 	res, err := tx.Exec("UPDATE accounts SET status = ? WHERE account_id = ?", StatusActive, req.TargetAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("unfreeze failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -291,18 +293,13 @@ func (bank *Bank) ApplyRate(req common.TellerRequest, reply *common.TellerReply)
 		return err
 	}
 
-	balance, status, exists, err := getAccount(tx, req.TargetAccountID)
+	balance, _, exists, err := getAccount(tx, req.TargetAccountID)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		reply.OK = false
 		reply.Message = "account not found"
-		return nil
-	}
-	if status == string(StatusFrozen) {
-		reply.OK = false
-		reply.Message = "account is frozen"
 		return nil
 	}
 
@@ -316,7 +313,7 @@ func (bank *Bank) ApplyRate(req common.TellerRequest, reply *common.TellerReply)
 	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, req.TargetAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("rate apply failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -344,7 +341,7 @@ func (bank *Bank) ChargeService(req common.TellerRequest, reply *common.TellerRe
 		return err
 	}
 
-	balance, status, exists, err := getAccount(tx, req.TargetAccountID)
+	balance, _, exists, err := getAccount(tx, req.TargetAccountID)
 	if err != nil {
 		return err
 	}
@@ -353,18 +350,13 @@ func (bank *Bank) ChargeService(req common.TellerRequest, reply *common.TellerRe
 		reply.Message = "account not found"
 		return nil
 	}
-	if status == string(StatusFrozen) {
+	if req.AmountCents > 0 {
 		reply.OK = false
-		reply.Message = "account is frozen"
-		return nil
-	}
-	if req.AmountCents < 0 {
-		reply.OK = false
-		reply.Message = "service fee must be non-negative"
+		reply.Message = "service fee can not be positive"
 		return nil
 	}
 
-	newBalance := balance - req.AmountCents
+	newBalance := balance + req.AmountCents
 	if newBalance < 0 {
 		reply.OK = false
 		reply.Message = "insufficient funds"
@@ -374,7 +366,7 @@ func (bank *Bank) ChargeService(req common.TellerRequest, reply *common.TellerRe
 	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, req.TargetAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("service charge failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -465,7 +457,7 @@ func (bank *Bank) Deposit(req common.CustomerRequest, reply *common.CustomerRepl
 	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, req.ActorAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("deposit failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -523,7 +515,7 @@ func (bank *Bank) Withdraw(req common.CustomerRequest, reply *common.CustomerRep
 	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, req.ActorAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("withdraw failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
@@ -601,14 +593,14 @@ func (bank *Bank) Transfer(req common.CustomerRequest, reply *common.CustomerRep
 	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", actorBalance-req.AmountCents, req.ActorAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("transfer debit failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
 	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", targetBalance+req.AmountCents, req.TargetAccountID)
 	if err != nil {
 		reply.OK = false
-		reply.Message = fmt.Sprintf("transfer credit failed: %v", err)
+		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 

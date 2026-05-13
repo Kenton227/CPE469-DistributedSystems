@@ -88,7 +88,7 @@ func rpcOperation(client *rpc.Client, method string, req any, reply *common.Cust
 		return
 	}
 	if !reply.OK {
-		fmt.Printf("Operation failed: %s\n", reply.Message)
+		fmt.Printf("%s failed: %s\n", method, reply.Message)
 		return
 	}
 	fmt.Println(reply.Message)

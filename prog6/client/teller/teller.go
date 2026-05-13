@@ -101,14 +101,14 @@ func main() {
 				continue
 			}
 
-			fee := shared.ReadInt64(reader, "Service fee in cents (positive number): ")
+			fee := shared.ReadInt64(reader, "Service fee in cents (negative number): ")
 
 			req := common.TellerRequest{TargetAccountID: accountID, AmountCents: fee}
 			var reply common.TellerReply
 			rpcOperation(client, "Bank.ChargeService", req, &reply)
 
 		case "q", "Q":
-			fmt.Println("Goodbye.")
+			fmt.Println("Quitting...")
 			return
 
 		default:
@@ -123,7 +123,7 @@ func rpcOperation(client *rpc.Client, method string, req any, reply *common.Tell
 		return
 	}
 	if !reply.OK {
-		fmt.Printf("Operation failed: %s\n", reply.Message)
+		fmt.Printf("%s failed: %s\n", method, reply.Message)
 		return
 	}
 	fmt.Println(reply.Message)
