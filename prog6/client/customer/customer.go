@@ -29,7 +29,7 @@ func main() {
 	fmt.Printf("\nWelcome %s!\n", username)
 
 	for {
-		fmt.Println("\nCustomer Options")
+		fmt.Println("\nCustomer Menu")
 		fmt.Println("1) Check balance")
 		fmt.Println("2) Deposit")
 		fmt.Println("3) Withdraw")
