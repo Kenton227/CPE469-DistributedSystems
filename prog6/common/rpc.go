@@ -1,41 +1,36 @@
 package common
 
+const BankPort string = "9000"
+
 type CustomerRequest struct {
-	RequestID   string
-	AccountID   int64
-	FromAccountID int64
-	ToAccountID int64
-	AmountCents int64
+	ActorAccountID 	int64
+	TargetAccountID int64
+	AmountCents 	int64
 }
 
 type CustomerReply struct {
 	OK                  bool
-	ErrorCode           string
 	Message             string
-	NewBalanceCents     int64
-	FromNewBalanceCents int64
-	ToNewBalanceCents   int64
-	Account             struct {
-		BalanceCents int64
-	}
 }
 
 type TellerRequest struct {
-	RequestID   string
-	AccountID   int64
-	Username    string
-	PercentBPS  int64
-	AmountCents int64
-	Operation   string
+	Username		string
+	TargetAccountID	int64
+	PercentBPS  	int64
+	AmountCents 	int64
 }
 
 type TellerReply struct {
 	OK              bool
-	ErrorCode       string
 	Message         string
-	NewBalanceCents int64
-	Account         struct {
-		AccountID int64
-		Username  string
-	}
+}
+
+type GetIDRequest struct {
+	Username		string
+}
+
+type GetIDReply struct {
+	OK			bool
+	ErrorMsg	string
+	AccountID	int64
 }
