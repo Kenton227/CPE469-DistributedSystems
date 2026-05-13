@@ -40,8 +40,6 @@ type Bank struct {
 	mutex sync.Mutex
 }
 
-// TODO: make charge service a negative input value, change error results to either return error or set !OK and return special message based on how severe the error is
-
 func main() {
 	db, err := sql.Open("sqlite3", "db/bank.db")
 	if err != nil {
