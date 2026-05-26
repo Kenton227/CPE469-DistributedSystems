@@ -1,5 +1,7 @@
 package common
 
+import "database/sql"
+
 const BankPort string = "1234"
 
 type Operation string
@@ -19,23 +21,23 @@ const (
 )
 
 type LogEntry struct {
-	LogId int64
+	LogIdx int64
 	Term int64
 	Op Operation
-	ActorAccountID int64
-	ActorUsername string
-	TargetAccountID int64
-	TargetUsername string
-	AmountCents int64
-	PercentBPS int64
+	ActorAccountID sql.NullInt64
+	ActorUsername sql.NullString
+	TargetAccountID sql.NullInt64
+	TargetUsername sql.NullString
+	AmountCents sql.NullInt64
+	PercentBPS sql.NullInt64
 }
 
 type OperationRequest struct {
 	Op Operation
-	ActorUsername string
-	TargetUsername string
-	AmountCents int64
-	PercentBPS int64
+	ActorUsername sql.NullString
+	TargetUsername sql.NullString
+	AmountCents sql.NullInt64
+	PercentBPS sql.NullInt64
 }
 
 type OperationReply struct {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"prog7/common"
 	"prog7/client/shared"
+	"database/sql"
 )
 
 func main() {
@@ -36,8 +37,8 @@ func main() {
 
 		switch choice {
 		case "1":
-			username := shared.GetUsername(reader, "Enter target username: ")
-			if username == "" {
+			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if username.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
@@ -47,8 +48,8 @@ func main() {
 			shared.RpcOperation(client, request, &reply)
 
 		case "2":
-			username := shared.GetUsername(reader, "Enter target username: ")
-			if username == "" {
+			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if username.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
@@ -58,8 +59,8 @@ func main() {
 			shared.RpcOperation(client, request, &reply)
 
 		case "3":
-			username := shared.GetUsername(reader, "Enter target username: ")
-			if username == "" {
+			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if username.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
@@ -69,8 +70,8 @@ func main() {
 			shared.RpcOperation(client, request, &reply)
 
 		case "4":
-			username := shared.GetUsername(reader, "Enter target username: ")
-			if username == "" {
+			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if username.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
@@ -80,29 +81,29 @@ func main() {
 			shared.RpcOperation(client, request, &reply)
 
 		case "5":
-			username := shared.GetUsername(reader, "Enter target username: ")
-			if username == "" {
+			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if username.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
-			bps := shared.ReadInt64(reader, "Percent in bps (ex: 250 = 2.50%, -125 = -1.25%): ")
+			bps := sql.NullInt64{Int64: shared.ReadInt64(reader, "Percent in bps (ex: 250 = 2.50%, -125 = -1.25%): "), Valid: true}
 
 			request := common.OperationRequest{Op: common.OpBonus, TargetUsername: username, PercentBPS: bps}
-			if bps < 0 {
+			if bps.Int64 < 0 {
 				request.Op = common.OpInterest
 			}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
 		case "6":
-			username := shared.GetUsername(reader, "Enter target username: ")
-			if username == "" {
+			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if username.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
-			fee := shared.ReadInt64(reader, "Service fee in cents (negative number): ")
+			fee := sql.NullInt64{Int64: shared.ReadInt64(reader, "Service fee in cents (negative number): "), Valid: true}
 
 			request := common.OperationRequest{Op: common.OpChargeService, TargetUsername: username, AmountCents: fee}
 			var reply common.OperationReply

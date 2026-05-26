@@ -5,20 +5,26 @@
 
 ## Usage:
 
-- run the bank servers with:
+- in the root directory, create the database with:
 
 ```
-docker compose up --build bankserver1 bankserver2 bankserver3
+sqlite3 db/bank.db < db/schema.sql
+```
+
+- run the bank server with:
+
+```
+go run bankServer/bankServer.go
 ```
 
 - run the teller client with:
 
 ```
-docker compose run teller
+go run client/teller/teller.go
 ```
 
 - run the customer client with:
 
 ```
-docker compose run customer
+go run client/customer/customer.go
 ```

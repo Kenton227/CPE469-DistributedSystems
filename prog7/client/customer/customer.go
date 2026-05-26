@@ -8,9 +8,8 @@ import (
 	"io"
 	"prog7/common"
 	"prog7/client/shared"
+	"database/sql"
 )
-
-var actorUsername string
 
 func main() {
 	client := shared.ConnectToBank()
@@ -18,12 +17,12 @@ func main() {
 
 	// get user info
 	reader := bufio.NewReader(os.Stdin)
-	actorUsername = shared.GetUsername(reader, "Please enter your username: ")
-	if actorUsername == "" {
+	actorUsername := sql.NullString{String: shared.GetUsername(reader, "Please enter your username: "), Valid: true}
+	if actorUsername.String == "" {
 		fmt.Println("username must contain at least 1 character")
 		os.Exit(1)
 	}
-	fmt.Printf("\nWelcome %s!\n", actorUsername)
+	fmt.Printf("\nWelcome %s!\n", actorUsername.String)
 
 	for {
 		fmt.Println("\nCustomer Menu")
@@ -48,24 +47,24 @@ func main() {
 			shared.RpcOperation(client, request, &reply)
 
 		case "2":
-			amt := shared.ReadInt64(reader, "Amount (cents): ")
+			amt := sql.NullInt64{Int64: shared.ReadInt64(reader, "Amount (cents): "), Valid: true}
 			request := common.OperationRequest{Op: common.OpDeposit, ActorUsername: actorUsername, AmountCents: amt}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
 		case "3":
-			amt := shared.ReadInt64(reader, "Amount (cents): ")
+			amt := sql.NullInt64{Int64: shared.ReadInt64(reader, "Amount (cents): "), Valid: true}
 			request := common.OperationRequest{Op: common.OpWithdraw, ActorUsername: actorUsername, AmountCents: amt}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
 		case "4":
-			targetUsername := shared.GetUsername(reader, "Enter target username: ")
-			if actorUsername == "" {
+			targetUsername := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
+			if actorUsername.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}
-			amt := shared.ReadInt64(reader, "Transfer amount (cents): ")
+			amt := sql.NullInt64{Int64: shared.ReadInt64(reader, "Transfer amount (cents): "), Valid: true}
 			request := common.OperationRequest{Op: common.OpTransfer, ActorUsername: actorUsername, TargetUsername: targetUsername, AmountCents: amt}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
