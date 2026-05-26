@@ -6,7 +6,6 @@ import (
 	"os"
 	"bufio"
 	"strconv"
-	"errors"
 	"io"
 	"net/rpc"
 	"prog7/common"
@@ -31,19 +30,6 @@ func ReadInt64(reader *bufio.Reader, prompt string) int64 {
 	}
 }
 
-func GetAccountID(client *rpc.Client, username string) (int64, error) {
-	req := common.GetIDRequest{Username: username}
-	var resp common.GetIDReply
-	if err := client.Call("Bank.GetAccountID", req, &resp); err != nil {
-		fmt.Printf("RPC error: %v\n", err)
-		os.Exit(1)
-	}
-	if !resp.OK {
-		return -1, errors.New(resp.ErrorMsg)
-	}
-	return resp.AccountID, nil
-}
-
 func GetUsername(reader *bufio.Reader, prompt string) string {
 	fmt.Print(prompt)
 	username, err := reader.ReadString('\n')
@@ -64,4 +50,16 @@ func ConnectToBank() *rpc.Client {
 	}
 	fmt.Println("Connected to banking server.")
 	return client
+}
+
+func RpcOperation(client *rpc.Client, req common.OperationRequest, reply *common.OperationReply) {
+	if err := client.Call("Bank.DoOperation", req, reply); err != nil {
+		fmt.Printf("RPC error (Bank.DoOperation): %v\n", err)
+		return
+	}
+	if !reply.OK {
+		fmt.Printf("%s failed: %s\n", req.Op, reply.Message)
+		return
+	}
+	fmt.Println(reply.Message)
 }

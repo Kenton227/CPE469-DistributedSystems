@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"strings"
 	"fmt"
-	"net/rpc"
 	"os"
 	"io"
 	"prog7/common"
@@ -38,74 +37,76 @@ func main() {
 		switch choice {
 		case "1":
 			username := shared.GetUsername(reader, "Enter target username: ")
+			if username == "" {
+				fmt.Println("username must contain at least 1 character")
+				continue
+			}
 
-			req := common.TellerRequest{Username: username}
-			var reply common.TellerReply
-			rpcOperation(client, "Bank.OpenAccount", req, &reply)
+			request := common.OperationRequest{Op: common.OpOpen, TargetUsername: username}
+			var reply common.OperationReply
+			shared.RpcOperation(client, request, &reply)
 
 		case "2":
 			username := shared.GetUsername(reader, "Enter target username: ")
-			accountID, err := shared.GetAccountID(client, username)
-			if err != nil {
-				fmt.Println(err)
+			if username == "" {
+				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
-			req := common.TellerRequest{TargetAccountID: accountID}
-			var reply common.TellerReply
-			rpcOperation(client, "Bank.CloseAccount", req, &reply)
+			request := common.OperationRequest{Op: common.OpClose, TargetUsername: username}
+			var reply common.OperationReply
+			shared.RpcOperation(client, request, &reply)
 
 		case "3":
 			username := shared.GetUsername(reader, "Enter target username: ")
-			accountID, err := shared.GetAccountID(client, username)
-			if err != nil {
-				fmt.Println(err)
+			if username == "" {
+				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
-			req := common.TellerRequest{TargetAccountID: accountID}
-			var reply common.TellerReply
-			rpcOperation(client, "Bank.FreezeAccount", req, &reply)
+			request := common.OperationRequest{Op: common.OpFreeze, TargetUsername: username}
+			var reply common.OperationReply
+			shared.RpcOperation(client, request, &reply)
 
 		case "4":
 			username := shared.GetUsername(reader, "Enter target username: ")
-			accountID, err := shared.GetAccountID(client, username)
-			if err != nil {
-				fmt.Println(err)
+			if username == "" {
+				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
-			req := common.TellerRequest{TargetAccountID: accountID}
-			var reply common.TellerReply
-			rpcOperation(client, "Bank.UnfreezeAccount", req, &reply)
+			request := common.OperationRequest{Op: common.OpUnfreeze, TargetUsername: username}
+			var reply common.OperationReply
+			shared.RpcOperation(client, request, &reply)
 
 		case "5":
 			username := shared.GetUsername(reader, "Enter target username: ")
-			accountID, err := shared.GetAccountID(client, username)
-			if err != nil {
-				fmt.Println(err)
+			if username == "" {
+				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
 			bps := shared.ReadInt64(reader, "Percent in bps (ex: 250 = 2.50%, -125 = -1.25%): ")
 
-			req := common.TellerRequest{TargetAccountID: accountID, PercentBPS: bps}
-			var reply common.TellerReply
-			rpcOperation(client, "Bank.ApplyRate", req, &reply)
+			request := common.OperationRequest{Op: common.OpBonus, TargetUsername: username, PercentBPS: bps}
+			if bps < 0 {
+				request.Op = common.OpInterest
+			}
+			var reply common.OperationReply
+			shared.RpcOperation(client, request, &reply)
 
 		case "6":
 			username := shared.GetUsername(reader, "Enter target username: ")
-			accountID, err := shared.GetAccountID(client, username)
-			if err != nil {
-				fmt.Println(err)
+			if username == "" {
+				fmt.Println("username must contain at least 1 character")
 				continue
 			}
 
 			fee := shared.ReadInt64(reader, "Service fee in cents (negative number): ")
 
-			req := common.TellerRequest{TargetAccountID: accountID, AmountCents: fee}
-			var reply common.TellerReply
-			rpcOperation(client, "Bank.ChargeService", req, &reply)
+			request := common.OperationRequest{Op: common.OpChargeService, TargetUsername: username, AmountCents: fee}
+			var reply common.OperationReply
+			shared.RpcOperation(client, request, &reply)
 
 		case "q", "Q":
 			fmt.Println("Quitting...")
@@ -115,16 +116,4 @@ func main() {
 			fmt.Println("Invalid option.")
 		}
 	}
-}
-
-func rpcOperation(client *rpc.Client, method string, req any, reply *common.TellerReply) {
-	if err := client.Call(method, req, reply); err != nil {
-		fmt.Printf("RPC error (%s): %v\n", method, err)
-		return
-	}
-	if !reply.OK {
-		fmt.Printf("%s failed: %s\n", method, reply.Message)
-		return
-	}
-	fmt.Println(reply.Message)
 }

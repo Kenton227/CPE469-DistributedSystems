@@ -7,9 +7,12 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 CREATE TABLE IF NOT EXISTS operations_log (
     log_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    term                INTEGER NOT NULL
     operation           TEXT NOT NULL CHECK (operation IN ('check_balance', 'deposit', 'withdraw', 'transfer', 'bonus', 'interest', 'open', 'close', 'freeze', 'unfreeze', 'charge_service')),
     actor_account_id    INTEGER,
+    actor_username      TEXT,
     target_account_id   INTEGER,
+    target_username     TEXT,
     amount_cents        INTEGER,
     percentage_bps      INTEGER
 );
