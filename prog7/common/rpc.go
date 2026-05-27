@@ -3,6 +3,7 @@ package common
 import "database/sql"
 
 const BankPort string = "1234"
+const TesterPort string = "1235"
 
 type Operation string
 
@@ -46,10 +47,23 @@ type OperationReply struct {
 }
 
 type AppendEntriesRequest struct {
+	Term int64
+	LeaderID string
+	PrevLogIdx int64
+	PrevLogTerm int64
 	Entries []LogEntry
+	LeaderCommit int64
 }
 
 type AppendEntriesReply struct {
 	OK bool
 	Term int64
+	AckIdx int64
+}
+
+type EmptyRequest struct{}
+
+type CompareLogsReply struct {
+	OK bool
+	Message string
 }

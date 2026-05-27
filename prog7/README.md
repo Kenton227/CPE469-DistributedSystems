@@ -5,26 +5,30 @@
 
 ## Usage:
 
-- in the root directory, create the database with:
+- in the root directory, build the containers with:
 
 ```
-sqlite3 db/bank.db < db/schema.sql
+docker compose build
 ```
 
-- run the bank server with:
+- run the tester and bank servers with:
 
 ```
-go run bankServer/bankServer.go
+docker compose up tester bankserver1 bankserver2 bankserver3
 ```
 
-- run the teller client with:
+- run the teller with:
 
 ```
-go run client/teller/teller.go
+docker compose run --rm teller
 ```
 
-- run the customer client with:
+- run the client with:
 
 ```
-go run client/customer/customer.go
+docker compose run --rm customer
 ```
+
+## NOTE
+
+- the leader automatically calls `Tester.CompareLogs` after a successful append where all replicas ACK

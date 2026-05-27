@@ -37,6 +37,12 @@ type Bank struct {
 	raftNode *RaftNode
 }
 
+var followerHosts = []string{"bankserver2", "bankserver3"}
+
+func getTesterAddr() string {
+	return fmt.Sprintf("tester:%s", common.TesterPort)
+}
+
 func initRaftMetadata(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS raft_metadata (
@@ -171,8 +177,61 @@ func (bank *Bank) insertLog(entry common.LogEntry) error {
 
 }
 
-func replicateLogs() error {
-	return nil
+func getLogEntry(db *sql.DB, logIdx int64) (common.LogEntry, error) {
+	var entry common.LogEntry
+	err := db.QueryRow(`
+		SELECT log_index, term, operation, actor_account_id, actor_username, target_account_id, target_username, amount_cents, percentage_bps
+		FROM operations_log
+		WHERE log_index = ?
+		`, logIdx).Scan(
+		&entry.LogIdx,
+		&entry.Term,
+		&entry.Op,
+		&entry.ActorAccountID,
+		&entry.ActorUsername,
+		&entry.TargetAccountID,
+		&entry.TargetUsername,
+		&entry.AmountCents,
+		&entry.PercentBPS,
+		)
+	return entry, err
+}
+
+func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
+	rows, err := db.Query(`
+		SELECT log_index, term, operation, actor_account_id, actor_username, target_account_id, target_username, amount_cents, percentage_bps
+		FROM operations_log
+		ORDER BY log_index ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := make([]common.LogEntry, 0)
+	for rows.Next() {
+		var entry common.LogEntry
+		if err := rows.Scan(
+			&entry.LogIdx,
+			&entry.Term,
+			&entry.Op,
+			&entry.ActorAccountID,
+			&entry.ActorUsername,
+			&entry.TargetAccountID,
+			&entry.TargetUsername,
+			&entry.AmountCents,
+			&entry.PercentBPS,
+		); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
 }
 
 func (bank *Bank) insertLogFromReq(req common.OperationRequest, reply *common.OperationReply) error {
@@ -228,123 +287,288 @@ func (bank *Bank) insertLogFromReq(req common.OperationRequest, reply *common.Op
 }
 
 func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.OperationReply) error {
-	err := bank.insertLogFromReq(req, reply)
-	if err != nil || !reply.OK {
-		return err
-	}
-
-	// if err := replicateLogs(); err != nil {
-	// 	return err
-	// }
-
 	bank.raftNode.mutex.Lock()
-	bank.raftNode.lastCommittedIdx = bank.raftNode.lastLoggedIdx
-	if err := bank.storeRaftMetadata(); err != nil {
+	if bank.raftNode.state != StateLeader {
 		bank.raftNode.mutex.Unlock()
-		return err
+		reply.OK = false
+		reply.Message = "not leader"
+		return nil
 	}
 	bank.raftNode.mutex.Unlock()
 
-	reply.OK = true
+	err := bank.insertLogFromReq(req, reply)
+	if err != nil || !(reply.OK) {
+		return err
+	}
+
+	if err := bank.replicateLatestEntry(); err != nil {
+		return err
+	}
+
+	bank.raftNode.mutex.Lock()
+	replyLogIdx := bank.raftNode.lastCommittedIdx
+	bank.raftNode.mutex.Unlock()
+
+	err = bank.applyLogEntries(replyLogIdx, reply)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func getLogEntry(tx *sql.Tx, logIdx int64) (common.LogEntry, error) {
-	var entry common.LogEntry
+func (bank *Bank) replicateLatestEntry() error {
+	bank.raftNode.mutex.Lock()
+	entryIdx := bank.raftNode.lastLoggedIdx
+	leaderCommit := bank.raftNode.lastCommittedIdx
+	term := bank.raftNode.term
+	bank.raftNode.mutex.Unlock()
 
-	err := tx.QueryRow(`
-		SELECT logIdx, term, operation, actor_account_id, actor_username, target_account_id, target_username, amount_cents, percentage_bps
-		FROM operations_log
-		WHERE log_id = ?
-		`, logIdx).Scan(
-		&entry.LogIdx,
-		&entry.Term,
-		&entry.Op,
-		&entry.ActorAccountID,
-		&entry.ActorUsername,
-		&entry.TargetAccountID,
-		&entry.TargetUsername,
-		&entry.AmountCents,
-		&entry.PercentBPS,
-		)
+	entry, err := getLogEntry(bank.db, entryIdx)
 	if err != nil {
-		return entry, err
+		return err
 	}
 
-	return entry, nil
+	prevLogIdx := entryIdx - 1
+	prevLogTerm := int64(0)
+	if prevLogIdx > 0 {
+		prevEntry, err := getLogEntry(bank.db, prevLogIdx)
+		if err != nil {
+			return err
+		}
+		prevLogTerm = prevEntry.Term
+	}
+
+	request := common.AppendEntriesRequest{
+		Term: term,
+		LeaderID: "bankserver1",
+		PrevLogIdx: prevLogIdx,
+		PrevLogTerm: prevLogTerm,
+		Entries: []common.LogEntry{entry},
+		LeaderCommit: leaderCommit,
+	}
+
+	acks := 1
+	allAcks := true
+	for _, host := range followerHosts {
+		ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
+		client, err := rpc.Dial("tcp", ipPort)
+		if err != nil {
+			allAcks = false
+			continue
+		}
+
+		var appendReply common.AppendEntriesReply
+		callErr := client.Call("Bank.AppendEntries", request, &appendReply)
+		client.Close()
+		if callErr != nil {
+			allAcks = false
+			continue
+		}
+		if appendReply.OK && appendReply.AckIdx >= entryIdx {
+			acks++
+		} else {
+			allAcks = false
+		}
+	}
+
+	if acks >= 2 {
+		bank.raftNode.mutex.Lock()
+		if entry.Term == bank.raftNode.term && entryIdx > bank.raftNode.lastCommittedIdx {
+			bank.raftNode.lastCommittedIdx = entryIdx
+			if err := bank.storeRaftMetadata(); err != nil {
+				bank.raftNode.mutex.Unlock()
+				return err
+			}
+		}
+		bank.raftNode.mutex.Unlock()
+	}
+
+	if acks < 2 {
+		return fmt.Errorf("failed to replicate log index %d to majority", entryIdx)
+	}
+
+	if allAcks {
+		_ = callTesterCompareLogs()
+	}
+
+	return nil
 }
 
-func (bank *Bank) applyLogEntry() (common.OperationReply, error) {
-	var reply common.OperationReply
+func callTesterCompareLogs() error {
+	client, err := rpc.Dial("tcp", getTesterAddr())
+	if err != nil {
+		return err
+	}
+	defer client.Close()
 
+	var reply common.CompareLogsReply
+	if err := client.Call("Tester.CompareLogs", common.EmptyRequest{}, &reply); err != nil {
+		return err
+	}
+
+	if reply.OK {
+		fmt.Printf("Tester log compare: OK - %s\n", reply.Message)
+	} else {
+		fmt.Printf("Tester log compare: MISMATCH - %s\n", reply.Message)
+	}
+
+	return nil
+}
+
+func (bank *Bank) GetOperationsLog(_ common.EmptyRequest, reply *[]common.LogEntry) error {
+	entries, err := getAllLogEntries(bank.db)
+	if err != nil {
+		return err
+	}
+	*reply = entries
+	return nil
+}
+
+func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.AppendEntriesReply) error {
+	bank.raftNode.mutex.Lock()
+	defer bank.raftNode.mutex.Unlock()
+
+	reply.OK = false
+	reply.Term = bank.raftNode.term
+	reply.AckIdx = bank.raftNode.lastLoggedIdx
+
+	if req.Term < bank.raftNode.term {
+		return nil
+	}
+
+	if req.Term > bank.raftNode.term {
+		bank.raftNode.term = req.Term
+		bank.raftNode.state = StateFollower
+	}
+
+	if req.PrevLogIdx > 0 {
+		prevEntry, err := getLogEntry(bank.db, req.PrevLogIdx)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				_ = bank.storeRaftMetadata()
+				return nil
+			}
+			return err
+		}
+		if prevEntry.Term != req.PrevLogTerm {
+			_ = bank.storeRaftMetadata()
+			return nil
+		}
+	}
+
+	for _, entry := range req.Entries {
+		existing, err := getLogEntry(bank.db, entry.LogIdx)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
+		if err == nil {
+			if existing.Term != entry.Term {
+				_, err = bank.db.Exec("DELETE FROM operations_log WHERE log_index >= ?", entry.LogIdx)
+				if err != nil {
+					return err
+				}
+				bank.raftNode.lastLoggedIdx = entry.LogIdx - 1
+			} else {
+				if entry.LogIdx > bank.raftNode.lastLoggedIdx {
+					bank.raftNode.lastLoggedIdx = entry.LogIdx
+				}
+				continue
+			}
+		}
+
+		if err := bank.insertLog(entry); err != nil {
+			return err
+		}
+		if entry.LogIdx > bank.raftNode.lastLoggedIdx {
+			bank.raftNode.lastLoggedIdx = entry.LogIdx
+		}
+	}
+
+	if req.LeaderCommit > bank.raftNode.lastCommittedIdx {
+		bank.raftNode.lastCommittedIdx = req.LeaderCommit
+		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, bank.raftNode.lastLoggedIdx)
+	}
+
+	if err := bank.storeRaftMetadata(); err != nil {
+		return err
+	}
+
+	reply.OK = true
+	reply.Term = bank.raftNode.term
+	reply.AckIdx = bank.raftNode.lastLoggedIdx
+	return nil
+}
+
+func (bank *Bank) applyLogEntry(reply *common.OperationReply) error {
 	bank.raftNode.mutex.Lock()
 	defer bank.raftNode.mutex.Unlock()
 
 	if !(bank.raftNode.lastAppliedIdx < bank.raftNode.lastCommittedIdx) {
-		return reply, errors.New("tried to apply uncommitted log index")
+		return errors.New("tried to apply uncommitted log index")
 	}
 	nextAppliedIdx := bank.raftNode.lastAppliedIdx + 1
 
 	bank.mutex.Lock()
 	defer bank.mutex.Unlock()
 
+	entry, err := getLogEntry(bank.db, nextAppliedIdx)
+	if err != nil {
+		return err
+	}
+
 	tx, err := bank.db.Begin()
 	if err != nil {
-		return reply, err
+		return err
 	}
 	defer tx.Rollback()
-
-	entry, err := getLogEntry(tx, nextAppliedIdx)
-	if err != nil {
-		return reply, err
-	}
 
 	var rpcErr error
 	switch entry.Op {
 	case common.OpOpen:
-		reply, rpcErr = openAccount(tx, entry)
+		rpcErr = openAccount(tx, entry, reply)
 	case common.OpClose:
-		reply, rpcErr = closeAccount(tx, entry)
+		rpcErr = closeAccount(tx, entry, reply)
 	case common.OpFreeze:
-		reply, rpcErr = freezeAccount(tx, entry)
+		rpcErr = freezeAccount(tx, entry, reply)
 	case common.OpUnfreeze:
-		reply, rpcErr = unfreezeAccount(tx, entry)
+		rpcErr = unfreezeAccount(tx, entry, reply)
 	case common.OpBonus, common.OpInterest:
-		reply, rpcErr = applyRate(tx, entry)
+		rpcErr = applyRate(tx, entry, reply)
 	case common.OpChargeService:
-		reply, rpcErr = chargeService(tx, entry)
+		rpcErr = chargeService(tx, entry, reply)
 	case common.OpCheckBal:
-		reply, rpcErr = checkBalance(tx, entry)
+		rpcErr = checkBalance(tx, entry, reply)
 	case common.OpDeposit:
-		reply, rpcErr = deposit(tx, entry)
+		rpcErr = deposit(tx, entry, reply)
 	case common.OpWithdraw:
-		reply, rpcErr = withdraw(tx, entry)
+		rpcErr = withdraw(tx, entry, reply)
 	case common.OpTransfer:
-		reply, rpcErr = transfer(tx, entry)
+		rpcErr = transfer(tx, entry, reply)
 	default:
 		reply.OK = false
 		reply.Message = fmt.Sprintf("unknown operation: %s", entry.Op)
-		return reply, nil
+		return nil
 	}
 
 	if err := tx.Commit(); err != nil {
-		return reply, err
+		return err
 	}
 
 	bank.raftNode.lastAppliedIdx = nextAppliedIdx
 	if err := bank.storeRaftMetadata(); err != nil {
-		return reply, err
+		return err
 	}
 
-	return reply, rpcErr
+	return rpcErr
 }
 
-func (bank *Bank) applyLogEntries(endLogIdx int64) (common.OperationReply, error) {
-	var reply common.OperationReply
+func (bank *Bank) applyLogEntries(endLogIdx int64, reply *common.OperationReply) error {
 	for bank.raftNode.lastAppliedIdx < endLogIdx {
-		if reply, err := bank.applyLogEntry(); err != nil {
-			return reply, err
+		if err := bank.applyLogEntry(reply); err != nil {
+			return err
 		}
 	}
-	return reply, nil
+	return nil
 }

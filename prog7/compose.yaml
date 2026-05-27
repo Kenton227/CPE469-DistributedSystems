@@ -1,11 +1,11 @@
 services:
-  #tester:
-  #  build:
-  #    context: .
-  #    dockerfile: dockerfile.tester
-  #  container_name: tester
-  #  ports:
-  #    - "9000:1234"
+  tester:
+    build:
+      context: .
+      dockerfile: dockerfile.tester
+    container_name: tester
+    ports:
+      - "9000:1234"
 
   bankserver1:
     build:
@@ -31,3 +31,19 @@ services:
     container_name: bankServer3
     ports:
       - "9003:1234"
+
+  customer:
+    build:
+      context: .
+      dockerfile: dockerfile.customer
+    container_name: customer
+    ports:
+      - "9004:1234"
+
+  teller:
+    build:
+      context: .
+      dockerfile: dockerfile.teller
+    container_name: teller
+    ports:
+      - "9005:1234"
