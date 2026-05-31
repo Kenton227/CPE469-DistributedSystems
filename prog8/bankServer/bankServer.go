@@ -166,9 +166,7 @@ func (bank *Bank) insertLog(entry common.LogEntry) error {
 		entry.LogIdx,
 		entry.Term,
 		entry.Op,
-		entry.ActorAccountID,
 		entry.ActorUsername,
-		entry.TargetAccountID,
 		entry.TargetUsername,
 		entry.AmountCents,
 		entry.PercentBPS,
@@ -181,16 +179,14 @@ func (bank *Bank) insertLog(entry common.LogEntry) error {
 func getLogEntry(db *sql.DB, logIdx int64) (common.LogEntry, error) {
 	var entry common.LogEntry
 	err := db.QueryRow(`
-		SELECT log_index, term, operation, actor_account_id, actor_username, target_account_id, target_username, amount_cents, percentage_bps
+		SELECT log_index, term, operation, actor_username, target_username, amount_cents, percentage_bps
 		FROM operations_log
 		WHERE log_index = ?
 		`, logIdx).Scan(
 		&entry.LogIdx,
 		&entry.Term,
 		&entry.Op,
-		&entry.ActorAccountID,
 		&entry.ActorUsername,
-		&entry.TargetAccountID,
 		&entry.TargetUsername,
 		&entry.AmountCents,
 		&entry.PercentBPS,
@@ -200,7 +196,7 @@ func getLogEntry(db *sql.DB, logIdx int64) (common.LogEntry, error) {
 
 func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
 	rows, err := db.Query(`
-		SELECT log_index, term, operation, actor_account_id, actor_username, target_account_id, target_username, amount_cents, percentage_bps
+		SELECT log_index, term, operation, actor_username, target_username, amount_cents, percentage_bps
 		FROM operations_log
 		ORDER BY log_index ASC
 	`)
@@ -216,9 +212,7 @@ func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
 			&entry.LogIdx,
 			&entry.Term,
 			&entry.Op,
-			&entry.ActorAccountID,
 			&entry.ActorUsername,
-			&entry.TargetAccountID,
 			&entry.TargetUsername,
 			&entry.AmountCents,
 			&entry.PercentBPS,
@@ -285,25 +279,6 @@ func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.Opera
 	}
 
 	bank.mutex.Lock()
-
-	if req.Op != common.OpOpen {
-		if req.ActorUsername.Valid {
-			actorAccountId, err := bank.getAccountID(req.ActorUsername.String, reply)
-			if err != nil || !reply.OK {
-				bank.mutex.Unlock()
-				return err
-			}
-			logEntry.ActorAccountID = actorAccountId
-		}
-		if req.TargetUsername.Valid {
-			targetAccountId, err := bank.getAccountID(req.TargetUsername.String, reply)
-			if err != nil || !reply.OK {
-				bank.mutex.Unlock()
-				return err
-			}
-			logEntry.TargetAccountID = targetAccountId
-		}
-	}
 
 	err = bank.insertLog(logEntry)
 	if err != nil {

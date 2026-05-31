@@ -2,9 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"prog7/common"
-	"errors"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -17,10 +17,10 @@ const (
 )
 
 type Account struct {
-	accountId int64
-	username string
+	accountId    int64
+	username     string
 	balanceCents int64
-	status Status
+	status       Status
 }
 
 func (bank *Bank) getAccountID(username string, reply *common.OperationReply) (sql.NullInt64, error) {
@@ -39,14 +39,18 @@ func (bank *Bank) getAccountID(username string, reply *common.OperationReply) (s
 	return accountID, nil
 }
 
-func getAccountEntry(tx *sql.Tx, accountID sql.NullInt64) (Account, error) {
+func getAccountEntry(tx *sql.Tx, targetUsername sql.NullString) (Account, error) {
 	var acc Account
 
-	if !accountID.Valid {
-		return acc, errors.New("cannot get account from NULL id")
+	if !targetUsername.Valid {
+		return acc, errors.New("cannot get account from NULL username")
 	}
-	acc.accountId = accountID.Int64
-	err := tx.QueryRow("SELECT username, balance_cents, status FROM accounts WHERE account_id = ?", accountID).Scan(&acc.username, &acc.balanceCents, &acc.status)
+	acc.username = targetUsername.String
+	err := tx.QueryRow(`
+			SELECT username, balance_cents, status
+			FROM accounts
+			WHERE username = ?`,
+		targetUsername).Scan(&acc.username, &acc.balanceCents, &acc.status)
 	if err != nil {
 		return acc, err
 	}
@@ -78,7 +82,7 @@ func openAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply
 
 func closeAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	deleteResult, err := tx.Exec("DELETE FROM accounts WHERE account_id = ?", entry.TargetAccountID)
+	deleteResult, err := tx.Exec("DELETE FROM accounts WHERE username = ?", entry.TargetUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -96,13 +100,13 @@ func closeAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRepl
 	}
 
 	reply.OK = true
-	reply.Message = fmt.Sprintf("Closed account %d", entry.TargetAccountID.Int64)
+	reply.Message = fmt.Sprintf("Closed account %s", entry.TargetUsername.String)
 	return nil
 }
 
 func freezeAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	res, err := tx.Exec("UPDATE accounts SET status = ? WHERE account_id = ?", StatusFrozen, entry.TargetAccountID)
+	res, err := tx.Exec("UPDATE accounts SET status = ? WHERE username = ?", StatusFrozen, entry.TargetUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -120,13 +124,13 @@ func freezeAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRep
 	}
 
 	reply.OK = true
-	reply.Message = fmt.Sprintf("Froze account %d", entry.TargetAccountID.Int64)
+	reply.Message = fmt.Sprintf("Froze account %s", entry.TargetUsername.String)
 	return nil
 }
 
 func unfreezeAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	res, err := tx.Exec("UPDATE accounts SET status = ? WHERE account_id = ?", StatusActive, entry.TargetAccountID)
+	res, err := tx.Exec("UPDATE accounts SET status = ? WHERE username = ?", StatusActive, entry.TargetUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -144,13 +148,13 @@ func unfreezeAccount(tx *sql.Tx, entry common.LogEntry, reply *common.OperationR
 	}
 
 	reply.OK = true
-	reply.Message = fmt.Sprintf("Unfroze account %d", entry.TargetAccountID.Int64)
+	reply.Message = fmt.Sprintf("Unfroze account %s", entry.TargetUsername.String)
 	return nil
 }
 
 func applyRate(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	targetAccount, err := getAccountEntry(tx, entry.TargetAccountID)
+	targetAccount, err := getAccountEntry(tx, entry.TargetUsername)
 	if err != nil {
 		return err
 	}
@@ -162,7 +166,7 @@ func applyRate(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) 
 		return nil
 	}
 
-	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, entry.TargetAccountID)
+	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE username = ?", newBalance, entry.TargetUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -176,7 +180,7 @@ func applyRate(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) 
 
 func chargeService(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	targetAccount, err := getAccountEntry(tx, entry.TargetAccountID)
+	targetAccount, err := getAccountEntry(tx, entry.TargetUsername)
 	if err != nil {
 		return err
 	}
@@ -193,7 +197,7 @@ func chargeService(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRep
 		return nil
 	}
 
-	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, entry.TargetAccountID)
+	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE username = ?", newBalance, entry.TargetUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -207,7 +211,7 @@ func chargeService(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRep
 
 func checkBalance(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorAccountID)
+	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
 	if err != nil {
 		return err
 	}
@@ -224,7 +228,7 @@ func checkBalance(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRepl
 
 func deposit(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorAccountID)
+	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
 	if err != nil {
 		return err
 	}
@@ -240,7 +244,7 @@ func deposit(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) er
 	}
 
 	newBalance := actorAccount.balanceCents + entry.AmountCents.Int64
-	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, entry.ActorAccountID)
+	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE username = ?", newBalance, entry.ActorUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -254,7 +258,7 @@ func deposit(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) er
 
 func withdraw(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorAccountID)
+	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
 	if err != nil {
 		return err
 	}
@@ -276,7 +280,7 @@ func withdraw(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) e
 		return nil
 	}
 
-	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", newBalance, entry.ActorAccountID)
+	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE username = ?", newBalance, entry.ActorUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -295,13 +299,13 @@ func transfer(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) e
 		reply.Message = "transfer amount must be positive"
 		return nil
 	}
-	if entry.ActorAccountID == entry.TargetAccountID {
+	if entry.ActorUsername == entry.TargetUsername {
 		reply.OK = false
 		reply.Message = "cannot transfer to same account"
 		return nil
 	}
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorAccountID)
+	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
 	if err != nil {
 		return err
 	}
@@ -311,7 +315,7 @@ func transfer(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) e
 		return nil
 	}
 
-	targetAccount, err := getAccountEntry(tx, entry.TargetAccountID)
+	targetAccount, err := getAccountEntry(tx, entry.TargetUsername)
 	if err != nil {
 		return err
 	}
@@ -327,14 +331,14 @@ func transfer(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) e
 		return nil
 	}
 
-	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", actorAccount.balanceCents-entry.AmountCents.Int64, entry.ActorAccountID)
+	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE username = ?", actorAccount.balanceCents-entry.AmountCents.Int64, entry.ActorUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
 		return nil
 	}
 
-	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE account_id = ?", targetAccount.balanceCents+entry.AmountCents.Int64, entry.TargetAccountID)
+	_, err = tx.Exec("UPDATE accounts SET balance_cents = ? WHERE username = ?", targetAccount.balanceCents+entry.AmountCents.Int64, entry.TargetUsername)
 	if err != nil {
 		reply.OK = false
 		reply.Message = fmt.Sprintf("%v", err)
@@ -342,6 +346,6 @@ func transfer(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) e
 	}
 
 	reply.OK = true
-	reply.Message = fmt.Sprintf("Transferred %d cents to account %d", entry.AmountCents.Int64, entry.TargetAccountID.Int64)
+	reply.Message = fmt.Sprintf("Transferred %d cents to account %s", entry.AmountCents.Int64, entry.TargetUsername.String)
 	return nil
 }

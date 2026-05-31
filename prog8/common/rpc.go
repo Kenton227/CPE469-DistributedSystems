@@ -22,48 +22,46 @@ const (
 )
 
 type LogEntry struct {
-	LogIdx int64
-	Term int64
-	Op Operation
-	ActorAccountID sql.NullInt64
-	ActorUsername sql.NullString
-	TargetAccountID sql.NullInt64
+	LogIdx         int64
+	Term           int64
+	Op             Operation
+	ActorUsername  sql.NullString
 	TargetUsername sql.NullString
-	AmountCents sql.NullInt64
-	PercentBPS sql.NullInt64
+	AmountCents    sql.NullInt64
+	PercentBPS     sql.NullInt64
 }
 
 type OperationRequest struct {
-	Op Operation
-	ActorUsername sql.NullString
+	Op             Operation
+	ActorUsername  sql.NullString
 	TargetUsername sql.NullString
-	AmountCents sql.NullInt64
-	PercentBPS sql.NullInt64
+	AmountCents    sql.NullInt64
+	PercentBPS     sql.NullInt64
 }
 
 type OperationReply struct {
-	OK bool
+	OK      bool
 	Message string
 }
 
 type AppendEntriesRequest struct {
-	Term int64
-	LeaderID string
-	PrevLogIdx int64
-	PrevLogTerm int64
-	Entries []LogEntry
+	Term         int64
+	LeaderID     string
+	PrevLogIdx   int64
+	PrevLogTerm  int64
+	Entries      []LogEntry
 	LeaderCommit int64
 }
 
 type AppendEntriesReply struct {
-	OK bool
-	Term int64
+	OK     bool
+	Term   int64
 	AckIdx int64
 }
 
 type EmptyRequest struct{}
 
 type CompareLogsReply struct {
-	OK bool
+	OK      bool
 	Message string
 }

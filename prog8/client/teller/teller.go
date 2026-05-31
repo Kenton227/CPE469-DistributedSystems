@@ -2,13 +2,13 @@ package main
 
 import (
 	"bufio"
-	"strings"
-	"fmt"
-	"os"
-	"io"
-	"prog7/common"
-	"prog7/client/shared"
 	"database/sql"
+	"fmt"
+	"io"
+	"os"
+	"prog7/client/shared"
+	"prog7/common"
+	"strings"
 )
 
 func main() {
