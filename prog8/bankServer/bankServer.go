@@ -95,49 +95,7 @@ func (bank *Bank) storeRaftMetadata() error {
 	return err
 }
 
-func main() {
-	// open database connection
-	db, err := sql.Open("sqlite3", "db/bank.db")
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	defer db.Close()
-	if err := db.Ping(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	if err := initRaftMetadata(db); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	term, lastLoggedIdx, lastCommittedIdx, lastAppliedIdx, err := loadRaftMetadata(db)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// init RaftNode for Bank struct
-	raftNode := &RaftNode{
-		term:             term,
-		state:            StateFollower,
-		lastLoggedIdx:    lastLoggedIdx,
-		lastCommittedIdx: lastCommittedIdx,
-		lastAppliedIdx:   lastAppliedIdx,
-	}
-	leaderFlag := flag.Bool("L", false, "start as leader")
-	flag.Parse()
-	if *leaderFlag {
-		raftNode.state = StateLeader
-	}
-
-	// register Bank struct
-	bank := &Bank{db: db, raftNode: raftNode}
-	rpc.Register(bank)
-
-	// listen for connections
+func listenForConnections() {
 	ipPort := fmt.Sprintf(":%s", common.BankPort)
 	fmt.Println(ipPort)
 	listener, err := net.Listen("tcp", ipPort)
@@ -157,6 +115,53 @@ func main() {
 		fmt.Println("Received connection")
 		go rpc.ServeConn(conn)
 	}
+}
+
+func main() {
+	// open database connection
+	db, err := sql.Open("sqlite3", "db/bank.db")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil { // Test database conn
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	if err := initRaftMetadata(db); err != nil { // Init raft_metadata table
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	term, lastLoggedIdx, lastCommittedIdx, lastAppliedIdx, err := loadRaftMetadata(db) // Test-read from raft_metadata
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	// init RaftNode for Bank struct
+	raftNode := &RaftNode{
+		term:             term,
+		state:            StateFollower,
+		lastLoggedIdx:    lastLoggedIdx,
+		lastCommittedIdx: lastCommittedIdx,
+		lastAppliedIdx:   lastAppliedIdx,
+	}
+	leaderFlag := flag.Bool("L", false, "start as leader") // Read leader from command-line flag
+	flag.Parse()
+	if *leaderFlag {
+		raftNode.state = StateLeader
+	}
+
+	// register Bank struct
+	bank := &Bank{db: db, raftNode: raftNode}
+	rpc.Register(bank)
+
+	// listen for connections
+	listenForConnections()
+
 }
 
 func (bank *Bank) insertLog(entry common.LogEntry) error {
@@ -234,13 +239,14 @@ func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
 	return entries, nil
 }
 
-func (bank *Bank) insertLogFromReq(req common.OperationRequest, reply *common.OperationReply) error {
+func newLogEntry(bank *Bank, req common.OperationRequest) common.LogEntry {
 	bank.raftNode.mutex.Lock()
 	defer bank.raftNode.mutex.Unlock()
 
 	nextLogIdx := bank.raftNode.lastLoggedIdx + 1
+	bank.raftNode.lastLoggedIdx = nextLogIdx // Immediately reserve it
 
-	logEntry := common.LogEntry{
+	return common.LogEntry{
 		LogIdx:         nextLogIdx,
 		Term:           bank.raftNode.term,
 		Op:             req.Op,
@@ -249,6 +255,11 @@ func (bank *Bank) insertLogFromReq(req common.OperationRequest, reply *common.Op
 		AmountCents:    req.AmountCents,
 		PercentBPS:     req.PercentBPS,
 	}
+}
+
+func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.OperationReply) error {
+
+	logEntry := newLogEntry(bank, req)
 
 	bank.mutex.Lock()
 
@@ -278,7 +289,6 @@ func (bank *Bank) insertLogFromReq(req common.OperationRequest, reply *common.Op
 	}
 	bank.mutex.Unlock()
 
-	bank.raftNode.lastLoggedIdx = nextLogIdx
 	if err := bank.storeRaftMetadata(); err != nil {
 		return err
 	}
@@ -286,6 +296,7 @@ func (bank *Bank) insertLogFromReq(req common.OperationRequest, reply *common.Op
 	return nil
 }
 
+/*RPC: Handles client request*/
 func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.OperationReply) error {
 	bank.raftNode.mutex.Lock()
 	if bank.raftNode.state != StateLeader {
@@ -296,7 +307,7 @@ func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.Operati
 	}
 	bank.raftNode.mutex.Unlock()
 
-	err := bank.insertLogFromReq(req, reply)
+	err := bank.appendRequest(req, reply)
 	if err != nil || !(reply.OK) {
 		return err
 	}

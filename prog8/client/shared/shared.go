@@ -1,14 +1,14 @@
 package shared
 
 import (
-	"fmt"
-	"strings"
-	"os"
 	"bufio"
-	"strconv"
+	"fmt"
 	"io"
 	"net/rpc"
+	"os"
 	"prog7/common"
+	"strconv"
+	"strings"
 )
 
 const RPCAddr = "localhost:9001"
