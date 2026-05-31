@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS operations_log (
 CREATE TABLE IF NOT EXISTS raft_metadata (
     id                  INTEGER PRIMARY KEY CHECK (id = 1),
     term                INTEGER NOT NULL,
-    last_logged_idx     INTEGER NOT NULL,
     last_committed_idx  INTEGER NOT NULL,
     last_applied_idx    INTEGER NOT NULL
 );

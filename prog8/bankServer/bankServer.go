@@ -26,7 +26,6 @@ type RaftNode struct {
 	mutex            sync.Mutex
 	state            NodeState
 	term             int64
-	lastLoggedIdx    int64
 	lastCommittedIdx int64
 	lastAppliedIdx   int64
 }
@@ -64,21 +63,20 @@ func initRaftMetadata(db *sql.DB) error {
 	return err
 }
 
-func loadRaftMetadata(db *sql.DB) (int64, int64, int64, int64, error) {
+func loadRaftMetadata(db *sql.DB) (int64, int64, int64, error) {
 	var term int64
-	var lastLoggedIdx int64
 	var lastCommittedIdx int64
 	var lastAppliedIdx int64
 
 	err := db.QueryRow(`
-		SELECT term, last_logged_idx, last_committed_idx, last_applied_idx
+		SELECT term, last_committed_idx, last_applied_idx
 		FROM raft_metadata
 		WHERE id = 1
-	`).Scan(&term, &lastLoggedIdx, &lastCommittedIdx, &lastAppliedIdx)
+	`).Scan(&term, &lastCommittedIdx, &lastAppliedIdx)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, err
 	}
-	return term, lastLoggedIdx, lastCommittedIdx, lastAppliedIdx, nil
+	return term, lastCommittedIdx, lastAppliedIdx, nil
 }
 
 func (bank *Bank) storeRaftMetadata() error {
@@ -88,7 +86,6 @@ func (bank *Bank) storeRaftMetadata() error {
 		WHERE id = 1
 	`,
 		bank.raftNode.term,
-		bank.raftNode.lastLoggedIdx,
 		bank.raftNode.lastCommittedIdx,
 		bank.raftNode.lastAppliedIdx,
 	)
@@ -135,7 +132,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	term, lastLoggedIdx, lastCommittedIdx, lastAppliedIdx, err := loadRaftMetadata(db) // Test-read from raft_metadata
+	term, lastCommittedIdx, lastAppliedIdx, err := loadRaftMetadata(db) // Test-read from raft_metadata
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -145,7 +142,6 @@ func main() {
 	raftNode := &RaftNode{
 		term:             term,
 		state:            StateFollower,
-		lastLoggedIdx:    lastLoggedIdx,
 		lastCommittedIdx: lastCommittedIdx,
 		lastAppliedIdx:   lastAppliedIdx,
 	}
@@ -239,14 +235,36 @@ func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
 	return entries, nil
 }
 
-func newLogEntry(bank *Bank, req common.OperationRequest) common.LogEntry {
+func getLastLoggedIdx(db *sql.DB) (int64, error) {
+	var idx sql.NullInt64
+
+	err := db.QueryRow(`
+		SELECT MAX(idx)
+		FROM logs
+	`).Scan(&idx)
+	if err != nil {
+		return 0, err
+	}
+
+	if !idx.Valid {
+		return 0, nil
+	}
+
+	return idx.Int64, nil
+}
+
+func newLogEntry(bank *Bank, req common.OperationRequest) (common.LogEntry, error) {
 	bank.raftNode.mutex.Lock()
 	defer bank.raftNode.mutex.Unlock()
 
-	nextLogIdx := bank.raftNode.lastLoggedIdx + 1
-	bank.raftNode.lastLoggedIdx = nextLogIdx // Immediately reserve it
+	lastLoggedIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return common.LogEntry{}, err
+	}
 
-	return common.LogEntry{
+	nextLogIdx := lastLoggedIdx + 1
+
+	logEntry := common.LogEntry{
 		LogIdx:         nextLogIdx,
 		Term:           bank.raftNode.term,
 		Op:             req.Op,
@@ -255,11 +273,16 @@ func newLogEntry(bank *Bank, req common.OperationRequest) common.LogEntry {
 		AmountCents:    req.AmountCents,
 		PercentBPS:     req.PercentBPS,
 	}
+
+	return logEntry, nil
 }
 
 func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.OperationReply) error {
 
-	logEntry := newLogEntry(bank, req)
+	logEntry, err := newLogEntry(bank, req)
+	if err != nil {
+		return err
+	}
 
 	bank.mutex.Lock()
 
@@ -282,7 +305,7 @@ func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.Opera
 		}
 	}
 
-	err := bank.insertLog(logEntry)
+	err = bank.insertLog(logEntry)
 	if err != nil {
 		bank.mutex.Unlock()
 		return err
@@ -330,7 +353,10 @@ func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.Operati
 
 func (bank *Bank) replicateLatestEntry() error {
 	bank.raftNode.mutex.Lock()
-	entryIdx := bank.raftNode.lastLoggedIdx
+	entryIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return err
+	}
 	leaderCommit := bank.raftNode.lastCommittedIdx
 	term := bank.raftNode.term
 	bank.raftNode.mutex.Unlock()
@@ -442,7 +468,11 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 
 	reply.OK = false
 	reply.Term = bank.raftNode.term
-	reply.AckIdx = bank.raftNode.lastLoggedIdx
+	lastLoggedIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return err
+	}
+	reply.AckIdx = lastLoggedIdx
 
 	if req.Term < bank.raftNode.term {
 		return nil
@@ -476,15 +506,14 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 
 		if err == nil {
 			if existing.Term != entry.Term {
-				_, err = bank.db.Exec("DELETE FROM operations_log WHERE log_index >= ?", entry.LogIdx)
+				_, err = bank.db.Exec(
+					"DELETE FROM operations_log WHERE log_index >= ?",
+					entry.LogIdx,
+				)
 				if err != nil {
 					return err
 				}
-				bank.raftNode.lastLoggedIdx = entry.LogIdx - 1
 			} else {
-				if entry.LogIdx > bank.raftNode.lastLoggedIdx {
-					bank.raftNode.lastLoggedIdx = entry.LogIdx
-				}
 				continue
 			}
 		}
@@ -492,14 +521,11 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 		if err := bank.insertLog(entry); err != nil {
 			return err
 		}
-		if entry.LogIdx > bank.raftNode.lastLoggedIdx {
-			bank.raftNode.lastLoggedIdx = entry.LogIdx
-		}
 	}
 
 	if req.LeaderCommit > bank.raftNode.lastCommittedIdx {
 		bank.raftNode.lastCommittedIdx = req.LeaderCommit
-		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, bank.raftNode.lastLoggedIdx)
+		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, lastLoggedIdx)
 	}
 
 	if err := bank.storeRaftMetadata(); err != nil {
@@ -508,7 +534,7 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 
 	reply.OK = true
 	reply.Term = bank.raftNode.term
-	reply.AckIdx = bank.raftNode.lastLoggedIdx
+	reply.AckIdx = lastLoggedIdx
 	return nil
 }
 
