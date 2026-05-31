@@ -2,27 +2,20 @@ package main
 
 import (
 	"bufio"
+	"strings"
 	"fmt"
 	"net/rpc"
 	"os"
-	"strconv"
-	"strings"
-	"time"
+	"io"
 	"prog6/common"
+	"prog6/client/shared"
 )
 
-const RPCAddr = "127.0.0.1:9000"
-
 func main() {
-	client, err := rpc.Dial("tcp", RPCAddr)
-	if err != nil {
-		fmt.Printf("failed to connect to server at %s: %v\n", RPCAddr, err)
-		os.Exit(1)
-	}
+	client := shared.ConnectToBank()
 	defer client.Close()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("Connected to banking server.")
+	reader := bufio.NewReader(os.Stdin)
 
 	for {
 		fmt.Println("\nTeller Menu")
@@ -35,99 +28,103 @@ func main() {
 		fmt.Println("q) Quit")
 		fmt.Print("Choose an option: ")
 
-		if !scanner.Scan() {
-			fmt.Println("input closed")
-			return
+		choice, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			fmt.Println(err)
+			os.Exit(1)
 		}
-		choice := strings.TrimSpace(scanner.Text())
+		choice = strings.TrimSpace(choice)
 
 		switch choice {
 		case "1":
-			fmt.Print("Username: ")
-			if !scanner.Scan() {
-				return
-			}
-			username := strings.TrimSpace(scanner.Text())
-			req := common.TellerRequest{RequestID: requestID("teller"), Username: username}
-			var resp common.TellerReply
-			callAndPrintTeller(client, "Bank.OpenAccount", req, &resp)
-			if resp.OK {
-				fmt.Printf("Opened account: id=%d username=%s\n", resp.Account.AccountID, resp.Account.Username)
-			}
+			username := shared.GetUsername(reader, "Enter target username: ")
+
+			req := common.TellerRequest{Username: username}
+			var reply common.TellerReply
+			rpcOperation(client, "Bank.OpenAccount", req, &reply)
+
 		case "2":
-			acct := readInt64(scanner, "Account ID: ")
-			req := common.TellerRequest{RequestID: requestID("teller"), AccountID: acct}
-			var resp common.TellerReply
-			callAndPrintTeller(client, "Bank.CloseAccount", req, &resp)
+			username := shared.GetUsername(reader, "Enter target username: ")
+			accountID, err := shared.GetAccountID(client, username)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			req := common.TellerRequest{TargetAccountID: accountID}
+			var reply common.TellerReply
+			rpcOperation(client, "Bank.CloseAccount", req, &reply)
+
 		case "3":
-			acct := readInt64(scanner, "Account ID: ")
-			req := common.TellerRequest{RequestID: requestID("teller"), AccountID: acct}
-			var resp common.TellerReply
-			callAndPrintTeller(client, "Bank.FreezeAccount", req, &resp)
+			username := shared.GetUsername(reader, "Enter target username: ")
+			accountID, err := shared.GetAccountID(client, username)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			req := common.TellerRequest{TargetAccountID: accountID}
+			var reply common.TellerReply
+			rpcOperation(client, "Bank.FreezeAccount", req, &reply)
+
 		case "4":
-			acct := readInt64(scanner, "Account ID: ")
-			req := common.TellerRequest{RequestID: requestID("teller"), AccountID: acct}
-			var resp common.TellerReply
-			callAndPrintTeller(client, "Bank.UnfreezeAccount", req, &resp)
+			username := shared.GetUsername(reader, "Enter target username: ")
+			accountID, err := shared.GetAccountID(client, username)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			req := common.TellerRequest{TargetAccountID: accountID}
+			var reply common.TellerReply
+			rpcOperation(client, "Bank.UnfreezeAccount", req, &reply)
+
 		case "5":
-			acct := readInt64(scanner, "Account ID: ")
-			bps := readInt64(scanner, "Percent in bps (ex: 250 = 2.50%, -125 = -1.25%): ")
-			op := "bonus"
-			if bps < 0 {
-				op = "interest"
+			username := shared.GetUsername(reader, "Enter target username: ")
+			accountID, err := shared.GetAccountID(client, username)
+			if err != nil {
+				fmt.Println(err)
+				continue
 			}
-			req := common.TellerRequest{RequestID: requestID("teller"), AccountID: acct, PercentBPS: bps, Operation: op}
-			var resp common.TellerReply
-			callAndPrintTeller(client, "Bank.ApplyRate", req, &resp)
-			if resp.OK {
-				fmt.Printf("New balance: %d cents\n", resp.NewBalanceCents)
-			}
+
+			bps := shared.ReadInt64(reader, "Percent in bps (ex: 250 = 2.50%, -125 = -1.25%): ")
+
+			req := common.TellerRequest{TargetAccountID: accountID, PercentBPS: bps}
+			var reply common.TellerReply
+			rpcOperation(client, "Bank.ApplyRate", req, &reply)
+
 		case "6":
-			acct := readInt64(scanner, "Account ID: ")
-			amount := readInt64(scanner, "Service fee in cents (positive number): ")
-			req := common.TellerRequest{RequestID: requestID("teller"), AccountID: acct, AmountCents: amount, Operation: "charge_service"}
-			var resp common.TellerReply
-			callAndPrintTeller(client, "Bank.ChargeService", req, &resp)
-			if resp.OK {
-				fmt.Printf("New balance: %d cents\n", resp.NewBalanceCents)
+			username := shared.GetUsername(reader, "Enter target username: ")
+			accountID, err := shared.GetAccountID(client, username)
+			if err != nil {
+				fmt.Println(err)
+				continue
 			}
+
+			fee := shared.ReadInt64(reader, "Service fee in cents (negative number): ")
+
+			req := common.TellerRequest{TargetAccountID: accountID, AmountCents: fee}
+			var reply common.TellerReply
+			rpcOperation(client, "Bank.ChargeService", req, &reply)
+
 		case "q", "Q":
-			fmt.Println("Goodbye.")
+			fmt.Println("Quitting...")
 			return
+
 		default:
 			fmt.Println("Invalid option.")
 		}
 	}
 }
 
-func callAndPrintTeller(client *rpc.Client, method string, req any, resp *common.TellerReply) {
-	if err := client.Call(method, req, resp); err != nil {
+func rpcOperation(client *rpc.Client, method string, req any, reply *common.TellerReply) {
+	if err := client.Call(method, req, reply); err != nil {
 		fmt.Printf("RPC error (%s): %v\n", method, err)
 		return
 	}
-	if !resp.OK {
-		fmt.Printf("Operation failed: %s (%s)\n", resp.Message, resp.ErrorCode)
+	if !reply.OK {
+		fmt.Printf("%s failed: %s\n", method, reply.Message)
 		return
 	}
-	fmt.Println("Operation succeeded.")
-}
-
-func readInt64(scanner *bufio.Scanner, prompt string) int64 {
-	for {
-		fmt.Print(prompt)
-		if !scanner.Scan() {
-			fmt.Println("input closed")
-			os.Exit(0)
-		}
-		v := strings.TrimSpace(scanner.Text())
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err == nil {
-			return n
-		}
-		fmt.Println("Please enter a valid integer.")
-	}
-}
-
-func requestID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	fmt.Println(reply.Message)
 }

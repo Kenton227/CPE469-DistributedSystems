@@ -1,0 +1,49 @@
+services:
+  tester:
+    build:
+      context: .
+      dockerfile: dockerfile.tester
+    container_name: tester
+    ports:
+      - "9000:1234"
+
+  bankserver1:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer1
+    ports:
+      - "9001:1234"
+    command: [ "-L" ]
+
+  bankserver2:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer2
+    ports:
+      - "9002:1234"
+
+  bankserver3:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer3
+    ports:
+      - "9003:1234"
+
+  customer:
+    build:
+      context: .
+      dockerfile: dockerfile.customer
+    container_name: customer
+    ports:
+      - "9004:1234"
+
+  teller:
+    build:
+      context: .
+      dockerfile: dockerfile.teller
+    container_name: teller
+    ports:
+      - "9005:1234"
