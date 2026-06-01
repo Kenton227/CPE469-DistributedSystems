@@ -217,6 +217,7 @@ func (bank *Bank) HandleVoteRequest(
 		}
 
 		reply.Term = bank.raftNode.term
+		go awaitHeartbeats(bank)
 	}
 
 	if request.Term < bank.raftNode.term {
@@ -251,21 +252,131 @@ func (bank *Bank) HandleVoteRequest(
 	return nil
 }
 
-func beginElection(bank *Bank) {
-	// not yet implemented
-	fmt.Println("Beginning election...")
-	bank.raftNode.mutex.Lock()
-	bank.raftNode.state = StateCandidate
-	bank.raftNode.mutex.Unlock()
+func beginElection(bank *Bank) error {
+	for {
+		fmt.Println("Beginning election...")
+		bank.raftNode.mutex.Lock()
 
-	return
+		if bank.raftNode.state == StateLeader {
+			bank.raftNode.mutex.Unlock()
+			return nil
+		}
+
+		bank.raftNode.state = StateCandidate
+		bank.raftNode.term += 1
+		myTerm := bank.raftNode.term
+		myAddr := bank.raftNode.address
+		bank.raftNode.currentVote = myAddr
+
+		if err := bank.updateRaftMetadata(); err != nil {
+			bank.raftNode.mutex.Unlock()
+			return err
+		}
+
+		votesReceived := 1
+
+		lastLoggedIdx, err := getLastLoggedIdx(bank.db)
+		if err != nil {
+			bank.raftNode.mutex.Unlock()
+			return err
+		}
+
+		lastLoggedTerm, err := getLastLoggedTerm(bank.db)
+		if err != nil {
+			bank.raftNode.mutex.Unlock()
+			return err
+		}
+
+		bank.raftNode.mutex.Unlock()
+
+		request := common.RequestVoteRequest{
+			Term:          myTerm,
+			CandidateAddr: myAddr,
+			LastLogIdx:    lastLoggedIdx,
+			LastLogTerm:   lastLoggedTerm,
+		}
+
+		majority := (len(common.SERVERS) / 2) + 1
+
+		for _, server := range common.SERVERS {
+			if server == myAddr {
+				continue
+			}
+
+			ipPort := fmt.Sprintf("%s:%s", server, common.BankPort)
+			client, err := rpc.Dial("tcp", ipPort)
+			if err != nil {
+				continue
+			}
+
+			reply := &common.RequestVoteReply{}
+			callErr := client.Call("Bank.HandleVoteRequest", request, reply)
+			client.Close()
+			if callErr != nil {
+				continue
+			}
+
+			if reply.Term > myTerm {
+				bank.raftNode.mutex.Lock()
+				if err := stepDown(bank, reply.Term); err != nil {
+					bank.raftNode.mutex.Unlock()
+					return err
+				}
+				bank.raftNode.mutex.Unlock()
+
+				go awaitHeartbeats(bank)
+				return nil
+			}
+
+			if reply.VoteGranted {
+				votesReceived++
+
+				if votesReceived < majority {
+					continue
+				}
+
+				bank.raftNode.mutex.Lock()
+
+				if bank.raftNode.state != StateCandidate ||
+					bank.raftNode.term != myTerm {
+					bank.raftNode.mutex.Unlock()
+					return nil
+				}
+
+				bank.raftNode.state = StateLeader
+				bank.raftNode.currentLeader = myAddr
+
+				bank.raftNode.mutex.Unlock()
+
+				go sendHeartbeats(bank)
+				fmt.Println(("Won Election"))
+				return nil
+			}
+		}
+
+		randomTimeout := time.Duration(
+			ELECTION_TIMER_MIN_MS+
+				rand.IntN(ELECTION_TIMER_MAX_MS-ELECTION_TIMER_MIN_MS+1),
+		) * time.Millisecond
+
+		time.Sleep(randomTimeout)
+
+		bank.raftNode.mutex.Lock()
+		stillCandidate := bank.raftNode.state == StateCandidate &&
+			bank.raftNode.term == myTerm
+		bank.raftNode.mutex.Unlock()
+
+		if !stillCandidate {
+			return nil
+		}
+	}
 }
 
 func awaitHeartbeats(bank *Bank) {
 	bank.raftNode.mutex.Lock()
-	isLeader := bank.raftNode.state == StateLeader
+	isFollower := bank.raftNode.state == StateFollower
 	bank.raftNode.mutex.Unlock()
-	if isLeader {
+	if !isFollower {
 		return
 	}
 	for {
@@ -285,7 +396,9 @@ func awaitHeartbeats(bank *Bank) {
 
 		case <-timer.C:
 
-			beginElection(bank)
+			if err := beginElection(bank); err != nil {
+				return
+			}
 			return
 		}
 	}
@@ -368,9 +481,8 @@ func sendHeartbeats(bank *Bank) error {
 
 			if steppedDown {
 				go awaitHeartbeats(bank)
-
+				return nil
 			}
-			return nil
 		}
 	}
 
