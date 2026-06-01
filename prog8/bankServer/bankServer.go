@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/rpc"
 	"os"
@@ -36,7 +37,7 @@ type RaftNode struct {
 	currentLeader    string
 	address          string
 	lastHeartbeat    time.Time
-	electionTimer    time.Duration
+	heartbeatChannel chan struct{}
 }
 
 type Bank struct {
@@ -160,6 +161,7 @@ func main() {
 		lastCommittedIdx: lastCommittedIdx,
 		lastAppliedIdx:   lastAppliedIdx,
 		address:          *addrFlag,
+		heartbeatChannel: make(chan struct{}, 1),
 	}
 	if *leaderFlag {
 		raftNode.state = StateLeader
@@ -170,12 +172,52 @@ func main() {
 	bank := &Bank{db: db, raftNode: raftNode}
 	rpc.Register(bank)
 
+	go awaitHeartbeats(bank)
+
 	// Leader heartbeat logic
 	go sendHeartbeats(bank)
 
 	// listen for connections
 	listenForConnections()
 
+}
+
+func beginElection(bank *Bank) {
+	// not yet implemented
+	fmt.Println("Beginning election...")
+	return
+}
+
+func awaitHeartbeats(bank *Bank) {
+	for {
+		electionTimeout := time.Duration(
+			ELECTION_TIMER_MIN_MS+
+				rand.IntN(ELECTION_TIMER_MAX_MS-ELECTION_TIMER_MIN_MS+1),
+		) * time.Millisecond
+
+		timer := time.NewTimer(electionTimeout)
+
+		select {
+		case <-bank.raftNode.heartbeatChannel:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			continue
+
+		case <-timer.C:
+			bank.raftNode.mutex.Lock()
+			myAddr := bank.raftNode.address
+			currLeader := bank.raftNode.currentLeader
+			bank.raftNode.mutex.Unlock()
+
+			if myAddr == currLeader {
+				continue
+			}
+
+			beginElection(bank)
+			return
+		}
+	}
 }
 
 func sendHeartbeats(bank *Bank) error {
@@ -545,7 +587,34 @@ func (bank *Bank) GetOperationsLog(_ common.EmptyRequest, reply *[]common.LogEnt
 	return nil
 }
 
-func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.AppendEntriesReply) error {
+func appendConsistencyCheck(bank *Bank, request common.AppendEntriesRequest) (bool, error) {
+	/* Returns true if consistency check succeeds */
+	if request.PrevLogIdx == 0 {
+		return true, nil
+	}
+
+	prevEntry, err := getLogEntry(bank.db, request.PrevLogIdx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if prevEntry.Term != request.PrevLogTerm {
+		return false, nil
+	}
+	return true, nil
+}
+
+func repairLog(bank *Bank, logIdx int64) error {
+	_, err := bank.db.Exec(
+		"DELETE FROM operations_log WHERE log_index >= ?",
+		logIdx,
+	)
+	return err
+}
+
+func (bank *Bank) AppendEntries(request common.AppendEntriesRequest, reply *common.AppendEntriesReply) error {
 	bank.raftNode.mutex.Lock()
 	defer bank.raftNode.mutex.Unlock()
 
@@ -557,50 +626,51 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 	}
 	reply.AckIdx = lastLoggedIdx
 
-	if req.Term < bank.raftNode.term {
+	if request.Term < bank.raftNode.term {
 		return nil
 	}
 
-	if req.Term > bank.raftNode.term {
-		bank.raftNode.term = req.Term
+	if request.Term > bank.raftNode.term {
+		bank.raftNode.term = request.Term
 		bank.raftNode.state = StateFollower
 	}
 
-	bank.raftNode.currentLeader = req.LeaderAddr
+	bank.raftNode.currentLeader = request.LeaderAddr
 	bank.raftNode.lastHeartbeat = time.Now()
 
-	if req.PrevLogIdx > 0 {
-		prevEntry, err := getLogEntry(bank.db, req.PrevLogIdx)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				_ = bank.updateRaftMetadata()
-				return nil
-			}
-			return err
-		}
-		if prevEntry.Term != req.PrevLogTerm {
-			_ = bank.updateRaftMetadata()
-			return nil
-		}
+	select {
+	case bank.raftNode.heartbeatChannel <- struct{}{}:
+	default:
 	}
 
-	for _, entry := range req.Entries {
-		existing, err := getLogEntry(bank.db, entry.LogIdx)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
+	lastCommittedIdx := bank.raftNode.lastCommittedIdx
 
-		if err == nil {
-			if existing.Term != entry.Term {
-				_, err = bank.db.Exec(
-					"DELETE FROM operations_log WHERE log_index >= ?",
-					entry.LogIdx,
-				)
-				if err != nil {
-					return err
-				}
-			} else {
+	if err := bank.updateRaftMetadata(); err != nil {
+		return err
+	}
+
+	ok, err := appendConsistencyCheck(bank, request)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
+	for _, entry := range request.Entries {
+		existing, readErr := getLogEntry(bank.db, entry.LogIdx)
+
+		if readErr != nil {
+			if !errors.Is(readErr, sql.ErrNoRows) {
+				return readErr
+			}
+		} else {
+			if existing.Term == entry.Term {
 				continue
+
+			}
+			if err := repairLog(bank, entry.LogIdx); err != nil {
+				return err
 			}
 		}
 
@@ -614,9 +684,8 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 		return err
 	}
 
-	if req.LeaderCommit > bank.raftNode.lastCommittedIdx {
-		bank.raftNode.lastCommittedIdx = req.LeaderCommit
-		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, newLastLoggedIdx)
+	if request.LeaderCommit > lastCommittedIdx {
+		bank.raftNode.lastCommittedIdx = min(request.LeaderCommit, newLastLoggedIdx)
 	}
 
 	if err := bank.updateRaftMetadata(); err != nil {
