@@ -12,8 +12,8 @@ import (
 )
 
 func main() {
-	client := shared.ConnectToBank()
-	defer client.Close()
+	conn := shared.ConnectToBank()
+	defer conn.Client.Close()
 
 	// get user info
 	reader := bufio.NewReader(os.Stdin)
@@ -44,19 +44,19 @@ func main() {
 		case "1":
 			request := common.OperationRequest{Op: common.OpCheckBal, ActorUsername: actorUsername}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "2":
 			amt := sql.NullInt64{Int64: shared.ReadInt64(reader, "Amount (cents): "), Valid: true}
 			request := common.OperationRequest{Op: common.OpDeposit, ActorUsername: actorUsername, AmountCents: amt}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "3":
 			amt := sql.NullInt64{Int64: shared.ReadInt64(reader, "Amount (cents): "), Valid: true}
 			request := common.OperationRequest{Op: common.OpWithdraw, ActorUsername: actorUsername, AmountCents: amt}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "4":
 			targetUsername := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
@@ -67,7 +67,7 @@ func main() {
 			amt := sql.NullInt64{Int64: shared.ReadInt64(reader, "Transfer amount (cents): "), Valid: true}
 			request := common.OperationRequest{Op: common.OpTransfer, ActorUsername: actorUsername, TargetUsername: targetUsername, AmountCents: amt}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "q", "Q":
 			fmt.Println("Quitting...")

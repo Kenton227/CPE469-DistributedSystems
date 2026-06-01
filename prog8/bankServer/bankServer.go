@@ -214,7 +214,7 @@ func sendHeartbeats(bank *Bank) error {
 
 		request := common.AppendEntriesRequest{
 			Term:         currentTerm,
-			LeaderID:     leaderAddr,
+			LeaderAddr:   leaderAddr,
 			PrevLogIdx:   prevLogIdx,
 			PrevLogTerm:  prevLogTerm,
 			Entries:      []common.LogEntry{}, // heartbeat = no log entries
@@ -396,10 +396,12 @@ func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.Opera
 func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.OperationReply) error {
 	bank.raftNode.mutex.Lock()
 	if bank.raftNode.state != StateLeader {
+		leaderAddr := bank.raftNode.currentLeader
 		bank.raftNode.mutex.Unlock()
+
 		reply.OK = false
 		reply.Message = "not leader"
-		reply.LeaderAddr = bank.raftNode.currentLeader
+		reply.LeaderAddr = leaderAddr
 		return nil
 	}
 	bank.raftNode.mutex.Unlock()
@@ -454,7 +456,7 @@ func (bank *Bank) replicateLatestEntry() error {
 
 	request := common.AppendEntriesRequest{
 		Term:         currentTerm,
-		LeaderID:     leaderAddr,
+		LeaderAddr:   leaderAddr,
 		PrevLogIdx:   prevLogIdx,
 		PrevLogTerm:  prevLogTerm,
 		Entries:      []common.LogEntry{entry},
@@ -564,6 +566,9 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 		bank.raftNode.state = StateFollower
 	}
 
+	bank.raftNode.currentLeader = req.LeaderAddr
+	bank.raftNode.lastHeartbeat = time.Now()
+
 	if req.PrevLogIdx > 0 {
 		prevEntry, err := getLogEntry(bank.db, req.PrevLogIdx)
 		if err != nil {
@@ -604,9 +609,14 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 		}
 	}
 
+	newLastLoggedIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return err
+	}
+
 	if req.LeaderCommit > bank.raftNode.lastCommittedIdx {
 		bank.raftNode.lastCommittedIdx = req.LeaderCommit
-		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, lastLoggedIdx)
+		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, newLastLoggedIdx)
 	}
 
 	if err := bank.updateRaftMetadata(); err != nil {
@@ -615,7 +625,7 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 
 	reply.OK = true
 	reply.Term = bank.raftNode.term
-	reply.AckIdx = lastLoggedIdx
+	reply.AckIdx = newLastLoggedIdx
 	return nil
 }
 

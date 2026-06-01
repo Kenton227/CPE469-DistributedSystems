@@ -12,7 +12,10 @@ import (
 	"strings"
 )
 
-const RPCAddr = "localhost:9001"
+type BankConnection struct {
+	Client *rpc.Client
+	Server string
+}
 
 func ReadInt64(reader *bufio.Reader, prompt string) int64 {
 	for {
@@ -46,27 +49,60 @@ func pickRandomServer() string {
 	return common.SERVERS[randomIdx]
 }
 
-// NOTE: caller must close client themselves!
-func ConnectToBank() *rpc.Client {
-	server := pickRandomServer()
+func dialServer(server string) (*rpc.Client, error) {
 	ipPort := fmt.Sprintf("%s:%s", server, common.BankPort)
-	client, err := rpc.Dial("tcp", ipPort)
-	if err != nil {
-		fmt.Printf("failed to connect to server at %s: %v\n", ipPort, err)
-		os.Exit(1)
-	}
-	fmt.Println("Connected to banking server.")
-	return client
+	return rpc.Dial("tcp", ipPort)
 }
 
-func RpcOperation(client *rpc.Client, req common.OperationRequest, reply *common.OperationReply) {
-	if err := client.Call("Bank.DoOperation", req, reply); err != nil {
+// NOTE: caller must close conn.Client themselves!
+func ConnectToBank() *BankConnection {
+	server := pickRandomServer()
+
+	client, err := dialServer(server)
+	if err != nil {
+		fmt.Printf("failed to connect to server %s: %v\n", server, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Connected to banking server %s.\n", server)
+
+	return &BankConnection{
+		Client: client,
+		Server: server,
+	}
+}
+
+func RpcOperation(conn *BankConnection, req common.OperationRequest, reply *common.OperationReply) {
+	if err := conn.Client.Call("Bank.DoOperation", req, reply); err != nil {
 		fmt.Printf("RPC error (Bank.DoOperation): %v\n", err)
 		return
 	}
+
+	if !reply.OK && reply.LeaderAddr != "" && reply.LeaderAddr != conn.Server {
+		fmt.Printf("Redirected to leader %s.\n", reply.LeaderAddr)
+
+		conn.Client.Close()
+
+		newClient, err := dialServer(reply.LeaderAddr)
+		if err != nil {
+			fmt.Printf("failed to connect to leader %s: %v\n", reply.LeaderAddr, err)
+			return
+		}
+
+		conn.Client = newClient
+		conn.Server = reply.LeaderAddr
+
+		// Retry once on the correct leader.
+		if err := conn.Client.Call("Bank.DoOperation", req, reply); err != nil {
+			fmt.Printf("RPC error after redirect (Bank.DoOperation): %v\n", err)
+			return
+		}
+	}
+
 	if !reply.OK {
 		fmt.Printf("%s failed: %s\n", req.Op, reply.Message)
 		return
 	}
+
 	fmt.Println(reply.Message)
 }

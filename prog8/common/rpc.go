@@ -54,7 +54,7 @@ type OperationReply struct {
 
 type AppendEntriesRequest struct {
 	Term         int64
-	LeaderID     string
+	LeaderAddr   string
 	PrevLogIdx   int64
 	PrevLogTerm  int64
 	Entries      []LogEntry

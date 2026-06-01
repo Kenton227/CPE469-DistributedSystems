@@ -12,8 +12,8 @@ import (
 )
 
 func main() {
-	client := shared.ConnectToBank()
-	defer client.Close()
+	conn := shared.ConnectToBank()
+	defer conn.Client.Close()
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -52,7 +52,7 @@ func main() {
 
 			request := common.OperationRequest{Op: common.OpOpen, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "2":
 			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
@@ -63,7 +63,7 @@ func main() {
 
 			request := common.OperationRequest{Op: common.OpClose, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "3":
 			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
@@ -74,7 +74,7 @@ func main() {
 
 			request := common.OperationRequest{Op: common.OpFreeze, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "4":
 			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
@@ -85,7 +85,7 @@ func main() {
 
 			request := common.OperationRequest{Op: common.OpUnfreeze, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "5":
 			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
@@ -101,7 +101,7 @@ func main() {
 				request.Op = common.OpInterest
 			}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "6":
 			username := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
@@ -114,7 +114,7 @@ func main() {
 
 			request := common.OperationRequest{Op: common.OpChargeService, ActorUsername: actorUsername, TargetUsername: username, AmountCents: fee}
 			var reply common.OperationReply
-			shared.RpcOperation(client, request, &reply)
+			shared.RpcOperation(conn, request, &reply)
 
 		case "q", "Q":
 			fmt.Println("Quitting...")
