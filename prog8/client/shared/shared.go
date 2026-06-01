@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/rpc"
 	"os"
-	"prog7/common"
+	"prog8/common"
 	"strconv"
 	"strings"
 )
@@ -40,9 +41,15 @@ func GetUsername(reader *bufio.Reader, prompt string) string {
 	return strings.TrimSpace(username)
 }
 
+func pickRandomServer() string {
+	randomIdx := rand.IntN(len(common.SERVERS))
+	return common.SERVERS[randomIdx]
+}
+
 // NOTE: caller must close client themselves!
 func ConnectToBank() *rpc.Client {
-	ipPort := fmt.Sprintf("bankserver1:%s", common.BankPort)
+	server := pickRandomServer()
+	ipPort := fmt.Sprintf("%s:%s", server, common.BankPort)
 	client, err := rpc.Dial("tcp", ipPort)
 	if err != nil {
 		fmt.Printf("failed to connect to server at %s: %v\n", ipPort, err)

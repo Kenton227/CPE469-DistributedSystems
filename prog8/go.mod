@@ -1,4 +1,4 @@
-module prog7
+module prog8
 
 go 1.22.2
 

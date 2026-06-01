@@ -14,7 +14,7 @@ services:
     container_name: bankServer1
     ports:
       - "9001:1234"
-    command: [ "-L" ]
+    command: [ "-addr", "bankserver1", "-L" ]
 
   bankserver2:
     build:
@@ -23,6 +23,7 @@ services:
     container_name: bankServer2
     ports:
       - "9002:1234"
+    command: [ "-addr", "bankserver2" ]
 
   bankserver3:
     build:
@@ -31,6 +32,7 @@ services:
     container_name: bankServer3
     ports:
       - "9003:1234"
+    command: [ "-addr", "bankserver3" ]
 
   customer:
     build:

@@ -8,11 +8,16 @@ import (
 	"net"
 	"net/rpc"
 	"os"
-	"prog7/common"
+	"prog8/common"
 	"sync"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+const ELECTION_TIMER_MAX_MS = 300
+const ELECTION_TIMER_MIN_MS = 150
+const HEARTBEAT_TIMER = 50 * time.Millisecond
 
 type NodeState int
 
@@ -28,6 +33,10 @@ type RaftNode struct {
 	term             int64
 	lastCommittedIdx int64
 	lastAppliedIdx   int64
+	currentLeader    string
+	address          string
+	lastHeartbeat    time.Time
+	electionTimer    time.Duration
 }
 
 type Bank struct {
@@ -36,8 +45,6 @@ type Bank struct {
 	raftNode *RaftNode
 }
 
-var followerHosts = []string{"bankserver2", "bankserver3"}
-
 func getTesterAddr() string {
 	return fmt.Sprintf("tester:%s", common.TesterPort)
 }
@@ -45,20 +52,19 @@ func getTesterAddr() string {
 func initRaftMetadata(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS raft_metadata (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
-			term INTEGER NOT NULL,
-			last_logged_idx INTEGER NOT NULL,
-			last_committed_idx INTEGER NOT NULL,
-			last_applied_idx INTEGER NOT NULL
-		)
+			id                  INTEGER PRIMARY KEY CHECK (id = 1),
+			term                INTEGER NOT NULL,
+			last_committed_idx  INTEGER NOT NULL,
+			last_applied_idx    INTEGER NOT NULL
+		);
 	`)
 	if err != nil {
 		return err
 	}
 
 	_, err = db.Exec(`
-		INSERT OR IGNORE INTO raft_metadata(id, term, last_logged_idx, last_committed_idx, last_applied_idx)
-		VALUES (1, 0, 0, 0, 0)
+		INSERT OR IGNORE INTO raft_metadata(id, term, last_committed_idx, last_applied_idx)
+		VALUES (1, 0, 0, 0)
 	`)
 	return err
 }
@@ -79,10 +85,10 @@ func loadRaftMetadata(db *sql.DB) (int64, int64, int64, error) {
 	return term, lastCommittedIdx, lastAppliedIdx, nil
 }
 
-func (bank *Bank) storeRaftMetadata() error {
+func (bank *Bank) updateRaftMetadata() error {
 	_, err := bank.db.Exec(`
 		UPDATE raft_metadata
-		SET term = ?, last_logged_idx = ?, last_committed_idx = ?, last_applied_idx = ?
+		SET term = ?, last_committed_idx = ?, last_applied_idx = ?
 		WHERE id = 1
 	`,
 		bank.raftNode.term,
@@ -109,12 +115,21 @@ func listenForConnections() {
 			fmt.Println(err)
 			continue
 		}
-		fmt.Println("Received connection")
+		// fmt.Println("Received connection")
 		go rpc.ServeConn(conn)
 	}
 }
 
 func main() {
+
+	addrFlag := flag.String("addr", "", "server address/hostname")
+	leaderFlag := flag.Bool("L", false, "start as leader") // Read leader from command-line flag
+	flag.Parse()
+	if *addrFlag == "" {
+		fmt.Println("missing required -addr flag")
+		os.Exit(1)
+	}
+
 	// open database connection
 	db, err := sql.Open("sqlite3", "db/bank.db")
 	if err != nil {
@@ -144,25 +159,108 @@ func main() {
 		state:            StateFollower,
 		lastCommittedIdx: lastCommittedIdx,
 		lastAppliedIdx:   lastAppliedIdx,
+		address:          *addrFlag,
 	}
-	leaderFlag := flag.Bool("L", false, "start as leader") // Read leader from command-line flag
-	flag.Parse()
 	if *leaderFlag {
 		raftNode.state = StateLeader
+		raftNode.currentLeader = raftNode.address
 	}
 
 	// register Bank struct
 	bank := &Bank{db: db, raftNode: raftNode}
 	rpc.Register(bank)
 
+	// Leader heartbeat logic
+	go sendHeartbeats(bank)
+
 	// listen for connections
 	listenForConnections()
 
 }
 
+func sendHeartbeats(bank *Bank) error {
+
+	ticker := time.NewTicker(HEARTBEAT_TIMER)
+	defer ticker.Stop()
+
+	for range ticker.C {
+
+		bank.raftNode.mutex.Lock()
+
+		if bank.raftNode.state != StateLeader {
+			bank.raftNode.mutex.Unlock()
+			return nil
+		}
+		currentCommit := bank.raftNode.lastCommittedIdx
+		currentTerm := bank.raftNode.term
+		leaderAddr := bank.raftNode.address
+		bank.raftNode.mutex.Unlock()
+
+		entryIdx, err := getLastLoggedIdx(bank.db)
+		if err != nil {
+			return err
+		}
+
+		prevLogIdx := entryIdx
+		prevLogTerm := int64(0)
+
+		if prevLogIdx > 0 {
+			prevEntry, err := getLogEntry(bank.db, prevLogIdx)
+			if err != nil {
+				return err
+			}
+			prevLogTerm = prevEntry.Term
+		}
+
+		request := common.AppendEntriesRequest{
+			Term:         currentTerm,
+			LeaderID:     leaderAddr,
+			PrevLogIdx:   prevLogIdx,
+			PrevLogTerm:  prevLogTerm,
+			Entries:      []common.LogEntry{}, // heartbeat = no log entries
+			LeaderCommit: currentCommit,
+		}
+
+		for _, host := range common.SERVERS {
+			if host == leaderAddr {
+				continue
+			}
+
+			ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
+
+			client, err := rpc.Dial("tcp", ipPort)
+			if err != nil {
+				continue
+			}
+
+			var appendReply common.AppendEntriesReply
+			callErr := client.Call("Bank.AppendEntries", request, &appendReply)
+			client.Close()
+
+			if callErr != nil {
+				continue
+			}
+
+			if appendReply.Term > currentTerm {
+				bank.raftNode.mutex.Lock()
+				if appendReply.Term > bank.raftNode.term {
+					bank.raftNode.term = appendReply.Term
+					bank.raftNode.state = StateFollower
+					bank.raftNode.currentLeader = ""
+					_ = bank.updateRaftMetadata()
+				}
+				bank.raftNode.mutex.Unlock()
+				return nil
+			}
+		}
+	}
+
+	return nil
+}
+
 func (bank *Bank) insertLog(entry common.LogEntry) error {
 	_, err := bank.db.Exec(
-		"INSERT INTO operations_log(log_index, term, operation, actor_account_id, actor_username, target_account_id, target_username, amount_cents, percentage_bps) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO operations_log(log_index, term, operation, actor_username, target_username, amount_cents, percentage_bps) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		entry.LogIdx,
 		entry.Term,
 		entry.Op,
@@ -233,8 +331,8 @@ func getLastLoggedIdx(db *sql.DB) (int64, error) {
 	var idx sql.NullInt64
 
 	err := db.QueryRow(`
-		SELECT MAX(idx)
-		FROM logs
+		SELECT MAX(log_index)
+		FROM operations_log
 	`).Scan(&idx)
 	if err != nil {
 		return 0, err
@@ -287,7 +385,7 @@ func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.Opera
 	}
 	bank.mutex.Unlock()
 
-	if err := bank.storeRaftMetadata(); err != nil {
+	if err := bank.updateRaftMetadata(); err != nil {
 		return err
 	}
 	reply.OK = true
@@ -301,6 +399,7 @@ func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.Operati
 		bank.raftNode.mutex.Unlock()
 		reply.OK = false
 		reply.Message = "not leader"
+		reply.LeaderAddr = bank.raftNode.currentLeader
 		return nil
 	}
 	bank.raftNode.mutex.Unlock()
@@ -328,13 +427,15 @@ func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.Operati
 
 func (bank *Bank) replicateLatestEntry() error {
 	bank.raftNode.mutex.Lock()
+	currentCommit := bank.raftNode.lastCommittedIdx
+	currentTerm := bank.raftNode.term
+	leaderAddr := bank.raftNode.address
+	bank.raftNode.mutex.Unlock()
+
 	entryIdx, err := getLastLoggedIdx(bank.db)
 	if err != nil {
 		return err
 	}
-	leaderCommit := bank.raftNode.lastCommittedIdx
-	term := bank.raftNode.term
-	bank.raftNode.mutex.Unlock()
 
 	entry, err := getLogEntry(bank.db, entryIdx)
 	if err != nil {
@@ -352,17 +453,20 @@ func (bank *Bank) replicateLatestEntry() error {
 	}
 
 	request := common.AppendEntriesRequest{
-		Term:         term,
-		LeaderID:     "bankserver1",
+		Term:         currentTerm,
+		LeaderID:     leaderAddr,
 		PrevLogIdx:   prevLogIdx,
 		PrevLogTerm:  prevLogTerm,
 		Entries:      []common.LogEntry{entry},
-		LeaderCommit: leaderCommit,
+		LeaderCommit: currentCommit,
 	}
 
-	acks := 1
+	acks_received := 1
 	allAcks := true
-	for _, host := range followerHosts {
+	for _, host := range common.SERVERS {
+		if host == bank.raftNode.address {
+			continue
+		}
 		ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
 		client, err := rpc.Dial("tcp", ipPort)
 		if err != nil {
@@ -378,17 +482,19 @@ func (bank *Bank) replicateLatestEntry() error {
 			continue
 		}
 		if appendReply.OK && appendReply.AckIdx >= entryIdx {
-			acks++
+			acks_received++
 		} else {
 			allAcks = false
 		}
 	}
 
-	if acks >= 2 {
+	majority := (len(common.SERVERS) / 2) + 1
+
+	if acks_received >= majority {
 		bank.raftNode.mutex.Lock()
 		if entry.Term == bank.raftNode.term && entryIdx > bank.raftNode.lastCommittedIdx {
 			bank.raftNode.lastCommittedIdx = entryIdx
-			if err := bank.storeRaftMetadata(); err != nil {
+			if err := bank.updateRaftMetadata(); err != nil {
 				bank.raftNode.mutex.Unlock()
 				return err
 			}
@@ -396,7 +502,7 @@ func (bank *Bank) replicateLatestEntry() error {
 		bank.raftNode.mutex.Unlock()
 	}
 
-	if acks < 2 {
+	if acks_received < majority {
 		return fmt.Errorf("failed to replicate log index %d to majority", entryIdx)
 	}
 
@@ -462,13 +568,13 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 		prevEntry, err := getLogEntry(bank.db, req.PrevLogIdx)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				_ = bank.storeRaftMetadata()
+				_ = bank.updateRaftMetadata()
 				return nil
 			}
 			return err
 		}
 		if prevEntry.Term != req.PrevLogTerm {
-			_ = bank.storeRaftMetadata()
+			_ = bank.updateRaftMetadata()
 			return nil
 		}
 	}
@@ -503,7 +609,7 @@ func (bank *Bank) AppendEntries(req common.AppendEntriesRequest, reply *common.A
 		bank.raftNode.lastCommittedIdx = min(bank.raftNode.lastCommittedIdx, lastLoggedIdx)
 	}
 
-	if err := bank.storeRaftMetadata(); err != nil {
+	if err := bank.updateRaftMetadata(); err != nil {
 		return err
 	}
 
@@ -569,7 +675,7 @@ func (bank *Bank) applyLogEntry(reply *common.OperationReply) error {
 	}
 
 	bank.raftNode.lastAppliedIdx = nextAppliedIdx
-	if err := bank.storeRaftMetadata(); err != nil {
+	if err := bank.updateRaftMetadata(); err != nil {
 		return err
 	}
 

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"prog7/common"
+	"prog8/common"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -211,7 +211,7 @@ func chargeService(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRep
 
 func checkBalance(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
+	actorAccount, err := getAccountEntry(tx, sql.NullString{String: entry.ActorUsername, Valid: true})
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func checkBalance(tx *sql.Tx, entry common.LogEntry, reply *common.OperationRepl
 
 func deposit(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
+	actorAccount, err := getAccountEntry(tx, sql.NullString{String: entry.ActorUsername, Valid: true})
 	if err != nil {
 		return err
 	}
@@ -258,7 +258,7 @@ func deposit(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) er
 
 func withdraw(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) error {
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
+	actorAccount, err := getAccountEntry(tx, sql.NullString{String: entry.ActorUsername, Valid: true})
 	if err != nil {
 		return err
 	}
@@ -299,13 +299,13 @@ func transfer(tx *sql.Tx, entry common.LogEntry, reply *common.OperationReply) e
 		reply.Message = "transfer amount must be positive"
 		return nil
 	}
-	if entry.ActorUsername == entry.TargetUsername {
+	if entry.TargetUsername.Valid && entry.ActorUsername == entry.TargetUsername.String {
 		reply.OK = false
 		reply.Message = "cannot transfer to same account"
 		return nil
 	}
 
-	actorAccount, err := getAccountEntry(tx, entry.ActorUsername)
+	actorAccount, err := getAccountEntry(tx, sql.NullString{String: entry.ActorUsername, Valid: true})
 	if err != nil {
 		return err
 	}

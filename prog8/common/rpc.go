@@ -5,6 +5,12 @@ import "database/sql"
 const BankPort string = "1234"
 const TesterPort string = "1235"
 
+var SERVERS = [...]string{
+	"bankserver1",
+	"bankserver2",
+	"bankserver3",
+}
+
 type Operation string
 
 const (
@@ -25,23 +31,25 @@ type LogEntry struct {
 	LogIdx         int64
 	Term           int64
 	Op             Operation
-	ActorUsername  sql.NullString
+	ActorUsername  string
 	TargetUsername sql.NullString
 	AmountCents    sql.NullInt64
 	PercentBPS     sql.NullInt64
 }
 
 type OperationRequest struct {
+	RequestID      int64
 	Op             Operation
-	ActorUsername  sql.NullString
+	ActorUsername  string
 	TargetUsername sql.NullString
 	AmountCents    sql.NullInt64
 	PercentBPS     sql.NullInt64
 }
 
 type OperationReply struct {
-	OK      bool
-	Message string
+	OK         bool
+	Message    string
+	LeaderAddr string
 }
 
 type AppendEntriesRequest struct {

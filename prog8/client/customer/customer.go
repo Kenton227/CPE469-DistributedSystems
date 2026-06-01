@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"prog7/client/shared"
-	"prog7/common"
+	"prog8/client/shared"
+	"prog8/common"
 	"strings"
 )
 
@@ -17,12 +17,12 @@ func main() {
 
 	// get user info
 	reader := bufio.NewReader(os.Stdin)
-	actorUsername := sql.NullString{String: shared.GetUsername(reader, "Please enter your username: "), Valid: true}
-	if actorUsername.String == "" {
+	actorUsername := shared.GetUsername(reader, "Please enter your username: ")
+	if actorUsername == "" {
 		fmt.Println("username must contain at least 1 character")
 		os.Exit(1)
 	}
-	fmt.Printf("\nWelcome %s!\n", actorUsername.String)
+	fmt.Printf("\nWelcome %s!\n", actorUsername)
 
 	for {
 		fmt.Println("\nCustomer Menu")
@@ -60,7 +60,7 @@ func main() {
 
 		case "4":
 			targetUsername := sql.NullString{String: shared.GetUsername(reader, "Enter target username: "), Valid: true}
-			if actorUsername.String == "" {
+			if targetUsername.String == "" {
 				fmt.Println("username must contain at least 1 character")
 				continue
 			}

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"prog7/client/shared"
-	"prog7/common"
+	"prog8/client/shared"
+	"prog8/common"
 	"strings"
 )
 
@@ -16,6 +16,13 @@ func main() {
 	defer client.Close()
 
 	reader := bufio.NewReader(os.Stdin)
+
+	actorUsername := shared.GetUsername(reader, "Please enter your username: ")
+	if actorUsername == "" {
+		fmt.Println("username must contain at least 1 character")
+		os.Exit(1)
+	}
+	fmt.Printf("\nWelcome %s!\n", actorUsername)
 
 	for {
 		fmt.Println("\nTeller Menu")
@@ -43,7 +50,7 @@ func main() {
 				continue
 			}
 
-			request := common.OperationRequest{Op: common.OpOpen, TargetUsername: username}
+			request := common.OperationRequest{Op: common.OpOpen, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
@@ -54,7 +61,7 @@ func main() {
 				continue
 			}
 
-			request := common.OperationRequest{Op: common.OpClose, TargetUsername: username}
+			request := common.OperationRequest{Op: common.OpClose, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
@@ -65,7 +72,7 @@ func main() {
 				continue
 			}
 
-			request := common.OperationRequest{Op: common.OpFreeze, TargetUsername: username}
+			request := common.OperationRequest{Op: common.OpFreeze, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
@@ -76,7 +83,7 @@ func main() {
 				continue
 			}
 
-			request := common.OperationRequest{Op: common.OpUnfreeze, TargetUsername: username}
+			request := common.OperationRequest{Op: common.OpUnfreeze, ActorUsername: actorUsername, TargetUsername: username}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 
@@ -89,7 +96,7 @@ func main() {
 
 			bps := sql.NullInt64{Int64: shared.ReadInt64(reader, "Percent in bps (ex: 250 = 2.50%, -125 = -1.25%): "), Valid: true}
 
-			request := common.OperationRequest{Op: common.OpBonus, TargetUsername: username, PercentBPS: bps}
+			request := common.OperationRequest{Op: common.OpBonus, ActorUsername: actorUsername, TargetUsername: username, PercentBPS: bps}
 			if bps.Int64 < 0 {
 				request.Op = common.OpInterest
 			}
@@ -105,7 +112,7 @@ func main() {
 
 			fee := sql.NullInt64{Int64: shared.ReadInt64(reader, "Service fee in cents (negative number): "), Valid: true}
 
-			request := common.OperationRequest{Op: common.OpChargeService, TargetUsername: username, AmountCents: fee}
+			request := common.OperationRequest{Op: common.OpChargeService, ActorUsername: actorUsername, TargetUsername: username, AmountCents: fee}
 			var reply common.OperationReply
 			shared.RpcOperation(client, request, &reply)
 

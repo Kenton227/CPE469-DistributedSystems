@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
-	"prog7/common"
+	"prog8/common"
 )
 
 var serverHosts = []string{"bankserver1", "bankserver2", "bankserver3"}

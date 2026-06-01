@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS operations_log (
     log_index           INTEGER NOT NULL UNIQUE,
     term                INTEGER NOT NULL,
     operation           TEXT NOT NULL CHECK (operation IN ('check_balance', 'deposit', 'withdraw', 'transfer', 'bonus', 'interest', 'open', 'close', 'freeze', 'unfreeze', 'charge_service')),
-    actor_username      TEXT,
+    actor_username      TEXT NOT NULL,
     target_username     TEXT,
     amount_cents        INTEGER,
     percentage_bps      INTEGER
