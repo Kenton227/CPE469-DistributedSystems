@@ -73,3 +73,15 @@ type CompareLogsReply struct {
 	OK      bool
 	Message string
 }
+
+type RequestVoteRequest struct {
+	Term          int64
+	CandidateAddr string
+	LastLogIdx    int64
+	LastLogTerm   int64
+}
+
+type RequestVoteReply struct {
+	Term        int64
+	VoteGranted bool
+}

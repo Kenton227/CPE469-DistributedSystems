@@ -38,6 +38,7 @@ type RaftNode struct {
 	address          string
 	lastHeartbeat    time.Time
 	heartbeatChannel chan struct{}
+	currentVote      string
 }
 
 type Bank struct {
@@ -56,7 +57,8 @@ func initRaftMetadata(db *sql.DB) error {
 			id                  INTEGER PRIMARY KEY CHECK (id = 1),
 			term                INTEGER NOT NULL,
 			last_committed_idx  INTEGER NOT NULL,
-			last_applied_idx    INTEGER NOT NULL
+			last_applied_idx    INTEGER NOT NULL,
+			current_vote        TEXT
 		);
 	`)
 	if err != nil {
@@ -89,12 +91,13 @@ func loadRaftMetadata(db *sql.DB) (int64, int64, int64, error) {
 func (bank *Bank) updateRaftMetadata() error {
 	_, err := bank.db.Exec(`
 		UPDATE raft_metadata
-		SET term = ?, last_committed_idx = ?, last_applied_idx = ?
+		SET term = ?, last_committed_idx = ?, last_applied_idx = ?, current_vote = ?
 		WHERE id = 1
 	`,
 		bank.raftNode.term,
 		bank.raftNode.lastCommittedIdx,
 		bank.raftNode.lastAppliedIdx,
+		bank.raftNode.currentVote,
 	)
 	return err
 }
@@ -163,7 +166,8 @@ func main() {
 		address:          *addrFlag,
 		heartbeatChannel: make(chan struct{}, 1),
 	}
-	if *leaderFlag {
+	isLeader := *leaderFlag
+	if isLeader {
 		raftNode.state = StateLeader
 		raftNode.currentLeader = raftNode.address
 	}
@@ -172,23 +176,98 @@ func main() {
 	bank := &Bank{db: db, raftNode: raftNode}
 	rpc.Register(bank)
 
-	go awaitHeartbeats(bank)
-
-	// Leader heartbeat logic
-	go sendHeartbeats(bank)
+	if isLeader {
+		go sendHeartbeats(bank)
+	} else {
+		go awaitHeartbeats(bank)
+	}
 
 	// listen for connections
 	listenForConnections()
 
 }
 
+func stepDown(bank *Bank, newTerm int64) error {
+	/* Caller must hold mutex */
+	bank.raftNode.term = newTerm
+	bank.raftNode.state = StateFollower
+	bank.raftNode.currentVote = ""
+	bank.raftNode.currentLeader = ""
+
+	if err := bank.updateRaftMetadata(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (bank *Bank) HandleVoteRequest(
+	request common.RequestVoteRequest,
+	reply *common.RequestVoteReply,
+) error {
+
+	bank.raftNode.mutex.Lock()
+	defer bank.raftNode.mutex.Unlock()
+
+	reply.VoteGranted = false
+	reply.Term = bank.raftNode.term
+
+	if request.Term > bank.raftNode.term { // Step down as candidate
+		if err := stepDown(bank, request.Term); err != nil {
+			return err
+		}
+
+		reply.Term = bank.raftNode.term
+	}
+
+	if request.Term < bank.raftNode.term {
+		return nil
+	}
+	if bank.raftNode.currentVote != "" && bank.raftNode.currentVote != request.CandidateAddr {
+		return nil
+	}
+
+	lastLoggedIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return err
+	}
+	lastLoggedTerm, err := getLastLoggedTerm(bank.db)
+	if err != nil {
+		return err
+	}
+
+	candidateUpToDate := request.LastLogTerm > lastLoggedTerm ||
+		(request.LastLogTerm == lastLoggedTerm && request.LastLogIdx >= lastLoggedIdx)
+
+	if !candidateUpToDate {
+		return nil
+	}
+
+	bank.raftNode.currentVote = request.CandidateAddr
+	if err = bank.updateRaftMetadata(); err != nil {
+		return err
+	}
+
+	reply.VoteGranted = true
+	return nil
+}
+
 func beginElection(bank *Bank) {
 	// not yet implemented
 	fmt.Println("Beginning election...")
+	bank.raftNode.mutex.Lock()
+	bank.raftNode.state = StateCandidate
+	bank.raftNode.mutex.Unlock()
+
 	return
 }
 
 func awaitHeartbeats(bank *Bank) {
+	bank.raftNode.mutex.Lock()
+	isLeader := bank.raftNode.state == StateLeader
+	bank.raftNode.mutex.Unlock()
+	if isLeader {
+		return
+	}
 	for {
 		electionTimeout := time.Duration(
 			ELECTION_TIMER_MIN_MS+
@@ -205,14 +284,6 @@ func awaitHeartbeats(bank *Bank) {
 			continue
 
 		case <-timer.C:
-			bank.raftNode.mutex.Lock()
-			myAddr := bank.raftNode.address
-			currLeader := bank.raftNode.currentLeader
-			bank.raftNode.mutex.Unlock()
-
-			if myAddr == currLeader {
-				continue
-			}
 
 			beginElection(bank)
 			return
@@ -283,17 +354,23 @@ func sendHeartbeats(bank *Bank) error {
 				continue
 			}
 
-			if appendReply.Term > currentTerm {
-				bank.raftNode.mutex.Lock()
-				if appendReply.Term > bank.raftNode.term {
-					bank.raftNode.term = appendReply.Term
-					bank.raftNode.state = StateFollower
-					bank.raftNode.currentLeader = ""
-					_ = bank.updateRaftMetadata()
+			steppedDown := false
+
+			bank.raftNode.mutex.Lock()
+			if appendReply.Term > bank.raftNode.term {
+				if err := stepDown(bank, appendReply.Term); err != nil {
+					bank.raftNode.mutex.Unlock()
+					return err
 				}
-				bank.raftNode.mutex.Unlock()
-				return nil
+				steppedDown = true
 			}
+			bank.raftNode.mutex.Unlock()
+
+			if steppedDown {
+				go awaitHeartbeats(bank)
+
+			}
+			return nil
 		}
 	}
 
@@ -385,6 +462,26 @@ func getLastLoggedIdx(db *sql.DB) (int64, error) {
 	}
 
 	return idx.Int64, nil
+}
+
+func getLastLoggedTerm(db *sql.DB) (int64, error) {
+	var term sql.NullInt64
+
+	err := db.QueryRow(`
+		SELECT term
+		FROM operations_log
+		ORDER BY log_index DESC
+		LIMIT 1
+	`).Scan(&term)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	return term.Int64, nil
 }
 
 func newLogEntry(bank *Bank, req common.OperationRequest) (common.LogEntry, error) {

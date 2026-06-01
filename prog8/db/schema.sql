@@ -20,5 +20,6 @@ CREATE TABLE IF NOT EXISTS raft_metadata (
     id                  INTEGER PRIMARY KEY CHECK (id = 1),
     term                INTEGER NOT NULL,
     last_committed_idx  INTEGER NOT NULL,
-    last_applied_idx    INTEGER NOT NULL
+    last_applied_idx    INTEGER NOT NULL,
+    current_vote        TEXT
 );
