@@ -95,13 +95,13 @@ def main():
 
     printRanked(
         tcgRankings,
-        "TCGs ranked by average card price",
-        "avg_card_price"
+        "TCGs ranked by total products",
+        "total_products"
     )
     printRanked(
         tcgRankings,
-        "TCGs ranked by total products",
-        "total_products"
+        "TCGs ranked by average card price",
+        "avg_card_price"
     )
     printRanked(
         tcgRankings,
