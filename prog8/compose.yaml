@@ -1,0 +1,79 @@
+services:
+  tester:
+    build:
+      context: .
+      dockerfile: dockerfile.tester
+    container_name: tester
+    ports:
+      - "9000:1234"
+
+  bankserver1:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer1
+    ports:
+      - "9001:1234"
+    command: [ "-addr", "bankserver1" ]
+    volumes:
+      - ./logs:/app/logs
+
+  bankserver2:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer2
+    ports:
+      - "9002:1234"
+    command: [ "-addr", "bankserver2" ]
+    volumes:
+      - ./logs:/app/logs
+
+  bankserver3:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer3
+    ports:
+      - "9003:1234"
+    command: [ "-addr", "bankserver3" ]
+    volumes:
+      - ./logs:/app/logs
+
+  bankserver4:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer4
+    ports:
+      - "9004:1234"
+    command: [ "-addr", "bankserver4" ]
+    volumes:
+      - ./logs:/app/logs
+
+  bankserver5:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer5
+    ports:
+      - "9005:1234"
+    command: [ "-addr", "bankserver5" ]
+    volumes:
+      - ./logs:/app/logs
+
+  customer:
+    build:
+      context: .
+      dockerfile: dockerfile.customer
+    container_name: customer
+    ports:
+      - "9010:1234"
+
+  teller:
+    build:
+      context: .
+      dockerfile: dockerfile.teller
+    container_name: teller
+    ports:
+      - "9011:1234"
