@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 CREATE TABLE IF NOT EXISTS operations_log (
     log_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id          INTEGER NOT NULL,
     log_index           INTEGER NOT NULL UNIQUE,
     term                INTEGER NOT NULL,
     operation           TEXT NOT NULL CHECK (operation IN ('check_balance', 'deposit', 'withdraw', 'transfer', 'bonus', 'interest', 'open', 'close', 'freeze', 'unfreeze', 'charge_service')),
@@ -22,4 +23,12 @@ CREATE TABLE IF NOT EXISTS raft_metadata (
     last_committed_idx  INTEGER NOT NULL,
     last_applied_idx    INTEGER NOT NULL,
     current_vote        TEXT
+);
+CREATE TABLE IF NOT EXISTS fulfilled_requests (
+    actor_username TEXT NOT NULL,
+    request_id INTEGER NOT NULL,
+    ok INTEGER NOT NULL,
+    message TEXT,
+    balance_cents INTEGER,
+    PRIMARY KEY (actor_username, request_id)
 );

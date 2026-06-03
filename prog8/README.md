@@ -29,6 +29,21 @@ docker compose run --rm teller
 docker compose run --rm customer
 ```
 
+## TESTING
+```
+docker compose run --rm teller -auto-open -user teller
+
+docker compose run --rm customer -auto -user alice -n 1000 -delay-ms 10
+
+docker compose run --rm customer -auto -user bob -n 1000 -delay-ms 10
+
+docker compose run --rm customer -auto -user carol -n 1000 -delay-ms 10
+
+docker compose run --rm customer -auto -user dave -n 1000 -delay-ms 10
+
+docker compose run --rm customer -auto -user erin -n 1000 -delay-ms 10
+```
+
 ## NOTE
 
 - the leader automatically calls `Tester.CompareLogs` after a successful append where all replicas ACK

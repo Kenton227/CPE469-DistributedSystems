@@ -9,6 +9,8 @@ var SERVERS = [...]string{
 	"bankserver1",
 	"bankserver2",
 	"bankserver3",
+	"bankserver4",
+	"bankserver5",
 }
 
 type Operation string
@@ -29,6 +31,7 @@ const (
 
 type LogEntry struct {
 	LogIdx         int64
+	RequestID      int64
 	Term           int64
 	Op             Operation
 	ActorUsername  string

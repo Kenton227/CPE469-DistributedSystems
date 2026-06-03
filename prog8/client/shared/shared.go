@@ -2,6 +2,7 @@ package shared
 
 import (
 	"bufio"
+	"database/sql"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -10,7 +11,11 @@ import (
 	"prog8/common"
 	"strconv"
 	"strings"
+
+	_ "github.com/mattn/go-sqlite3"
 )
+
+var TEST_USERS = []string{"alice", "bob", "carol", "dave", "erin"}
 
 type BankConnection struct {
 	Client *rpc.Client
@@ -72,10 +77,10 @@ func ConnectToBank() *BankConnection {
 	}
 }
 
-func RpcOperation(conn *BankConnection, req common.OperationRequest, reply *common.OperationReply) {
+func RpcOperation(conn *BankConnection, req common.OperationRequest, reply *common.OperationReply) bool {
 	if err := conn.Client.Call("Bank.DoOperation", req, reply); err != nil {
 		fmt.Printf("RPC error (Bank.DoOperation): %v\n", err)
-		return
+		return false
 	}
 
 	if !reply.OK && reply.LeaderAddr != "" && reply.LeaderAddr != conn.Server {
@@ -86,23 +91,72 @@ func RpcOperation(conn *BankConnection, req common.OperationRequest, reply *comm
 		newClient, err := dialServer(reply.LeaderAddr)
 		if err != nil {
 			fmt.Printf("failed to connect to leader %s: %v\n", reply.LeaderAddr, err)
-			return
+			return false
 		}
 
 		conn.Client = newClient
 		conn.Server = reply.LeaderAddr
 
-		// Retry once on the correct leader.
 		if err := conn.Client.Call("Bank.DoOperation", req, reply); err != nil {
 			fmt.Printf("RPC error after redirect (Bank.DoOperation): %v\n", err)
-			return
+			return false
 		}
 	}
 
 	if !reply.OK {
 		fmt.Printf("%s failed: %s\n", req.Op, reply.Message)
-		return
+		return true
 	}
 
 	fmt.Println(reply.Message)
+	return true
+}
+
+func InitClientRequestDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS client_requests (
+			actor_username TEXT PRIMARY KEY,
+			next_request_id INTEGER NOT NULL
+		)
+	`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func GetNextRequestID(db *sql.DB, actorUsername string) (int64, error) {
+	var requestID int64
+
+	err := db.QueryRow(`
+		SELECT next_request_id
+		FROM client_requests
+		WHERE actor_username = ?
+	`, actorUsername).Scan(&requestID)
+
+	if err == sql.ErrNoRows {
+		requestID = 1
+		_, err = db.Exec(`
+			INSERT INTO client_requests(actor_username, next_request_id)
+			VALUES (?, ?)
+		`, actorUsername, requestID)
+	}
+
+	return requestID, err
+}
+
+func AdvanceRequestID(db *sql.DB, actorUsername string) error {
+	_, err := db.Exec(`
+		UPDATE client_requests
+		SET next_request_id = next_request_id + 1
+		WHERE actor_username = ?
+	`, actorUsername)
+	return err
 }

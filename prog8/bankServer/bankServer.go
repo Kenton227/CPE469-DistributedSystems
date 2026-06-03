@@ -16,9 +16,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const ELECTION_TIMER_MAX_MS = 300
-const ELECTION_TIMER_MIN_MS = 150
-const HEARTBEAT_TIMER = 50 * time.Millisecond
+const ELECTION_TIMER_MAX_MS = 10000
+const ELECTION_TIMER_MIN_MS = 6000
+const HEARTBEAT_TIMER = 2000 * time.Millisecond
 
 type NodeState int
 
@@ -45,6 +45,7 @@ type Bank struct {
 	mutex    sync.Mutex
 	db       *sql.DB
 	raftNode *RaftNode
+	logFile  *os.File
 }
 
 func getTesterAddr() string {
@@ -172,8 +173,16 @@ func main() {
 		raftNode.currentLeader = raftNode.address
 	}
 
+	// init logfile
+	logFile, err := initDebugLog(*addrFlag)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+
 	// register Bank struct
-	bank := &Bank{db: db, raftNode: raftNode}
+	bank := &Bank{db: db, raftNode: raftNode, logFile: logFile}
 	rpc.Register(bank)
 
 	if isLeader {
@@ -181,7 +190,6 @@ func main() {
 	} else {
 		go awaitHeartbeats(bank)
 	}
-
 	// listen for connections
 	listenForConnections()
 
@@ -209,30 +217,41 @@ func (bank *Bank) HandleVoteRequest(
 	defer bank.raftNode.mutex.Unlock()
 
 	reply.VoteGranted = false
+	voteDenied := false
 	reply.Term = bank.raftNode.term
 
-	if request.Term > bank.raftNode.term { // Step down as candidate
+	if request.Term > bank.raftNode.term {
 		if err := stepDown(bank, request.Term); err != nil {
+			bank.debugLog("SERVER %s DENIES VOTE FOR SERVER %s",
+				bank.raftNode.address,
+				request.CandidateAddr,
+			)
 			return err
 		}
-
 		reply.Term = bank.raftNode.term
-		go awaitHeartbeats(bank)
 	}
 
 	if request.Term < bank.raftNode.term {
-		return nil
+		voteDenied = true
 	}
 	if bank.raftNode.currentVote != "" && bank.raftNode.currentVote != request.CandidateAddr {
-		return nil
+		voteDenied = true
 	}
 
 	lastLoggedIdx, err := getLastLoggedIdx(bank.db)
 	if err != nil {
+		bank.debugLog("SERVER %s DENIES VOTE FOR SERVER %s",
+			bank.raftNode.address,
+			request.CandidateAddr,
+		)
 		return err
 	}
 	lastLoggedTerm, err := getLastLoggedTerm(bank.db)
 	if err != nil {
+		bank.debugLog("SERVER %s DENIES VOTE FOR SERVER %s",
+			bank.raftNode.address,
+			request.CandidateAddr,
+		)
 		return err
 	}
 
@@ -240,15 +259,33 @@ func (bank *Bank) HandleVoteRequest(
 		(request.LastLogTerm == lastLoggedTerm && request.LastLogIdx >= lastLoggedIdx)
 
 	if !candidateUpToDate {
-		return nil
+		voteDenied = true
 	}
 
-	bank.raftNode.currentVote = request.CandidateAddr
-	if err = bank.updateRaftMetadata(); err != nil {
-		return err
+	if voteDenied {
+		bank.debugLog("SERVER %s DENIES VOTE FOR SERVER %s",
+			bank.raftNode.address,
+			request.CandidateAddr,
+		)
+	} else {
+
+		bank.raftNode.currentVote = request.CandidateAddr
+		if err = bank.updateRaftMetadata(); err != nil {
+			bank.debugLog("SERVER %s DENIES VOTE FOR SERVER %s",
+				bank.raftNode.address,
+				request.CandidateAddr,
+			)
+			return err
+		}
+
+		reply.VoteGranted = true
+		bank.debugLog("SERVER %s VOTES FOR SERVER %s",
+			bank.raftNode.address,
+			request.CandidateAddr,
+		)
+
 	}
 
-	reply.VoteGranted = true
 	return nil
 }
 
@@ -295,6 +332,7 @@ func beginElection(bank *Bank) error {
 			LastLogIdx:    lastLoggedIdx,
 			LastLogTerm:   lastLoggedTerm,
 		}
+		bank.debugLog("CANDIDATE SERVER %s SENDING A VOTING REQUEST", myAddr)
 
 		majority := (len(common.SERVERS) / 2) + 1
 
@@ -349,7 +387,8 @@ func beginElection(bank *Bank) error {
 				bank.raftNode.mutex.Unlock()
 
 				go sendHeartbeats(bank)
-				fmt.Println(("Won Election"))
+				bank.debugLog("CANDIDATE SERVER %s WINS THE ELECTION FOR TERM %d", myAddr, myTerm)
+				fmt.Print("Wins election")
 				return nil
 			}
 		}
@@ -360,6 +399,7 @@ func beginElection(bank *Bank) error {
 		) * time.Millisecond
 
 		time.Sleep(randomTimeout)
+		bank.debugLog("ELECTION TIMEOUT")
 
 		bank.raftNode.mutex.Lock()
 		stillCandidate := bank.raftNode.state == StateCandidate &&
@@ -367,6 +407,7 @@ func beginElection(bank *Bank) error {
 		bank.raftNode.mutex.Unlock()
 
 		if !stillCandidate {
+			bank.debugLog("CANDIDATE SERVER %s LOSES THE ELECTION FOR TERM %d", myAddr, myTerm)
 			return nil
 		}
 	}
@@ -405,84 +446,101 @@ func awaitHeartbeats(bank *Bank) {
 }
 
 func sendHeartbeats(bank *Bank) error {
+	sendOneHeartbeat(bank)
 
 	ticker := time.NewTicker(HEARTBEAT_TIMER)
 	defer ticker.Stop()
 
 	for range ticker.C {
-
-		bank.raftNode.mutex.Lock()
-
-		if bank.raftNode.state != StateLeader {
-			bank.raftNode.mutex.Unlock()
-			return nil
+		if err := sendOneHeartbeat(bank); err != nil {
+			continue
 		}
-		currentCommit := bank.raftNode.lastCommittedIdx
-		currentTerm := bank.raftNode.term
-		leaderAddr := bank.raftNode.address
-		bank.raftNode.mutex.Unlock()
+	}
 
-		entryIdx, err := getLastLoggedIdx(bank.db)
+	return nil
+}
+
+func sendOneHeartbeat(bank *Bank) error {
+	bank.raftNode.mutex.Lock()
+
+	if bank.raftNode.state != StateLeader {
+		bank.raftNode.mutex.Unlock()
+		return nil
+	}
+	currentCommit := bank.raftNode.lastCommittedIdx
+	currentTerm := bank.raftNode.term
+	leaderAddr := bank.raftNode.address
+	bank.raftNode.mutex.Unlock()
+
+	entryIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return err
+	}
+
+	prevLogIdx := entryIdx
+	prevLogTerm := int64(0)
+
+	if prevLogIdx > 0 {
+		prevEntry, err := getLogEntry(bank.db, prevLogIdx)
 		if err != nil {
 			return err
 		}
+		prevLogTerm = prevEntry.Term
+	}
 
-		prevLogIdx := entryIdx
-		prevLogTerm := int64(0)
+	request := common.AppendEntriesRequest{
+		Term:         currentTerm,
+		LeaderAddr:   leaderAddr,
+		PrevLogIdx:   prevLogIdx,
+		PrevLogTerm:  prevLogTerm,
+		Entries:      []common.LogEntry{}, // heartbeat = no log entries
+		LeaderCommit: currentCommit,
+	}
 
-		if prevLogIdx > 0 {
-			prevEntry, err := getLogEntry(bank.db, prevLogIdx)
-			if err != nil {
+	for _, host := range common.SERVERS {
+		if host == leaderAddr {
+			continue
+		}
+
+		ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
+
+		client, err := rpc.Dial("tcp", ipPort)
+		if err != nil {
+			continue
+		}
+
+		bank.debugLog("LEADER SENDS HEARTBEAT TO SERVER %s", host)
+		var appendReply common.AppendEntriesReply
+		callErr := client.Call("Bank.AppendEntries", request, &appendReply)
+		client.Close()
+
+		if callErr != nil {
+			continue
+		}
+
+		if appendReply.OK {
+			bank.debugLog("LEADER RECEIVES ACK FROM SERVER %s FOR HEARTBEAT", host)
+		} else {
+
+			if err := bank.catchUpFollower(host, currentTerm, leaderAddr, currentCommit); err != nil {
+			}
+		}
+
+		steppedDown := false
+
+		bank.raftNode.mutex.Lock()
+		if appendReply.Term > bank.raftNode.term {
+			if err := stepDown(bank, appendReply.Term); err != nil {
+				bank.raftNode.mutex.Unlock()
 				return err
 			}
-			prevLogTerm = prevEntry.Term
+			steppedDown = true
 		}
+		bank.raftNode.mutex.Unlock()
 
-		request := common.AppendEntriesRequest{
-			Term:         currentTerm,
-			LeaderAddr:   leaderAddr,
-			PrevLogIdx:   prevLogIdx,
-			PrevLogTerm:  prevLogTerm,
-			Entries:      []common.LogEntry{}, // heartbeat = no log entries
-			LeaderCommit: currentCommit,
-		}
-
-		for _, host := range common.SERVERS {
-			if host == leaderAddr {
-				continue
-			}
-
-			ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
-
-			client, err := rpc.Dial("tcp", ipPort)
-			if err != nil {
-				continue
-			}
-
-			var appendReply common.AppendEntriesReply
-			callErr := client.Call("Bank.AppendEntries", request, &appendReply)
-			client.Close()
-
-			if callErr != nil {
-				continue
-			}
-
-			steppedDown := false
-
-			bank.raftNode.mutex.Lock()
-			if appendReply.Term > bank.raftNode.term {
-				if err := stepDown(bank, appendReply.Term); err != nil {
-					bank.raftNode.mutex.Unlock()
-					return err
-				}
-				steppedDown = true
-			}
-			bank.raftNode.mutex.Unlock()
-
-			if steppedDown {
-				go awaitHeartbeats(bank)
-				return nil
-			}
+		if steppedDown {
+			go awaitHeartbeats(bank)
+			return nil
 		}
 	}
 
@@ -491,8 +549,9 @@ func sendHeartbeats(bank *Bank) error {
 
 func (bank *Bank) insertLog(entry common.LogEntry) error {
 	_, err := bank.db.Exec(
-		"INSERT INTO operations_log(log_index, term, operation, actor_username, target_username, amount_cents, percentage_bps) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO operations_log(log_index, request_id, term, operation, actor_username, target_username, amount_cents, percentage_bps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		entry.LogIdx,
+		entry.RequestID,
 		entry.Term,
 		entry.Op,
 		entry.ActorUsername,
@@ -508,11 +567,12 @@ func (bank *Bank) insertLog(entry common.LogEntry) error {
 func getLogEntry(db *sql.DB, logIdx int64) (common.LogEntry, error) {
 	var entry common.LogEntry
 	err := db.QueryRow(`
-		SELECT log_index, term, operation, actor_username, target_username, amount_cents, percentage_bps
+		SELECT log_index, request_id, term, operation, actor_username, target_username, amount_cents, percentage_bps
 		FROM operations_log
 		WHERE log_index = ?
 		`, logIdx).Scan(
 		&entry.LogIdx,
+		&entry.RequestID,
 		&entry.Term,
 		&entry.Op,
 		&entry.ActorUsername,
@@ -525,7 +585,7 @@ func getLogEntry(db *sql.DB, logIdx int64) (common.LogEntry, error) {
 
 func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
 	rows, err := db.Query(`
-		SELECT log_index, term, operation, actor_username, target_username, amount_cents, percentage_bps
+		SELECT log_index, request_id, term, operation, actor_username, target_username, amount_cents, percentage_bps
 		FROM operations_log
 		ORDER BY log_index ASC
 	`)
@@ -539,6 +599,7 @@ func getAllLogEntries(db *sql.DB) ([]common.LogEntry, error) {
 		var entry common.LogEntry
 		if err := rows.Scan(
 			&entry.LogIdx,
+			&entry.RequestID,
 			&entry.Term,
 			&entry.Op,
 			&entry.ActorUsername,
@@ -615,6 +676,7 @@ func newLogEntry(bank *Bank, req common.OperationRequest) (common.LogEntry, erro
 		TargetUsername: req.TargetUsername,
 		AmountCents:    req.AmountCents,
 		PercentBPS:     req.PercentBPS,
+		RequestID:      req.RequestID,
 	}
 
 	return logEntry, nil
@@ -635,6 +697,11 @@ func (bank *Bank) appendRequest(req common.OperationRequest, reply *common.Opera
 		return err
 	}
 	bank.mutex.Unlock()
+	bank.debugLog("LEADER SERVER %s ADDS REQUEST %d TO LOG ENTRY %d",
+		bank.raftNode.address,
+		req.RequestID,
+		logEntry.LogIdx,
+	)
 
 	if err := bank.updateRaftMetadata(); err != nil {
 		return err
@@ -657,12 +724,17 @@ func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.Operati
 	}
 	bank.raftNode.mutex.Unlock()
 
+	bank.debugLog("LEADER SERVER %s RECEIVES REQUEST %d FROM CLIENT",
+		bank.raftNode.address,
+		req.RequestID,
+	)
+
 	err := bank.appendRequest(req, reply)
 	if err != nil || !(reply.OK) {
 		return err
 	}
 
-	if err := bank.replicateLatestEntry(); err != nil {
+	if err := bank.replicateLatestEntry(req.RequestID); err != nil {
 		return err
 	}
 
@@ -678,7 +750,7 @@ func (bank *Bank) DoOperation(req common.OperationRequest, reply *common.Operati
 	return nil
 }
 
-func (bank *Bank) replicateLatestEntry() error {
+func (bank *Bank) replicateLatestEntry(requestID int64) error {
 	bank.raftNode.mutex.Lock()
 	currentCommit := bank.raftNode.lastCommittedIdx
 	currentTerm := bank.raftNode.term
@@ -715,7 +787,6 @@ func (bank *Bank) replicateLatestEntry() error {
 	}
 
 	acks_received := 1
-	allAcks := true
 	for _, host := range common.SERVERS {
 		if host == bank.raftNode.address {
 			continue
@@ -723,21 +794,23 @@ func (bank *Bank) replicateLatestEntry() error {
 		ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
 		client, err := rpc.Dial("tcp", ipPort)
 		if err != nil {
-			allAcks = false
 			continue
 		}
 
+		bank.debugLog("LEADER SENDS REQUEST %d TO SERVER %s", requestID, host)
 		var appendReply common.AppendEntriesReply
 		callErr := client.Call("Bank.AppendEntries", request, &appendReply)
 		client.Close()
 		if callErr != nil {
-			allAcks = false
 			continue
 		}
 		if appendReply.OK && appendReply.AckIdx >= entryIdx {
 			acks_received++
+			bank.debugLog("LEADER RECEIVES ACK FROM SERVER %s FOR REQUEST %d",
+				host,
+				requestID,
+			)
 		} else {
-			allAcks = false
 		}
 	}
 
@@ -757,31 +830,6 @@ func (bank *Bank) replicateLatestEntry() error {
 
 	if acks_received < majority {
 		return fmt.Errorf("failed to replicate log index %d to majority", entryIdx)
-	}
-
-	if allAcks {
-		_ = callTesterCompareLogs()
-	}
-
-	return nil
-}
-
-func callTesterCompareLogs() error {
-	client, err := rpc.Dial("tcp", getTesterAddr())
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	var reply common.CompareLogsReply
-	if err := client.Call("Tester.CompareLogs", common.EmptyRequest{}, &reply); err != nil {
-		return err
-	}
-
-	if reply.OK {
-		fmt.Printf("Tester log compare: OK - %s\n", reply.Message)
-	} else {
-		fmt.Printf("Tester log compare: MISMATCH - %s\n", reply.Message)
 	}
 
 	return nil
@@ -823,9 +871,86 @@ func repairLog(bank *Bank, logIdx int64) error {
 	return err
 }
 
+func (bank *Bank) catchUpFollower(host string, currentTerm int64, leaderAddr string, leaderCommit int64) error {
+	lastIdx, err := getLastLoggedIdx(bank.db)
+	if err != nil {
+		return err
+	}
+
+	for prevLogIdx := lastIdx; prevLogIdx >= 0; prevLogIdx-- {
+		prevLogTerm := int64(0)
+
+		if prevLogIdx > 0 {
+			prevEntry, err := getLogEntry(bank.db, prevLogIdx)
+			if err != nil {
+				return err
+			}
+			prevLogTerm = prevEntry.Term
+		}
+
+		entries := make([]common.LogEntry, 0)
+		for idx := prevLogIdx + 1; idx <= lastIdx; idx++ {
+			entry, err := getLogEntry(bank.db, idx)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, entry)
+		}
+
+		request := common.AppendEntriesRequest{
+			Term:         currentTerm,
+			LeaderAddr:   leaderAddr,
+			PrevLogIdx:   prevLogIdx,
+			PrevLogTerm:  prevLogTerm,
+			Entries:      entries,
+			LeaderCommit: leaderCommit,
+		}
+
+		ipPort := fmt.Sprintf("%s:%s", host, common.BankPort)
+		client, err := rpc.Dial("tcp", ipPort)
+		if err != nil {
+			return err
+		}
+
+		var reply common.AppendEntriesReply
+		callErr := client.Call("Bank.AppendEntries", request, &reply)
+		client.Close()
+
+		if callErr != nil {
+			return callErr
+		}
+
+		if reply.Term > currentTerm {
+			bank.raftNode.mutex.Lock()
+			err := stepDown(bank, reply.Term)
+			bank.raftNode.mutex.Unlock()
+			return err
+		}
+
+		if reply.OK {
+			bank.debugLog("LEADER REPAIRS LOG ON SERVER %s THROUGH LOG ENTRY %d",
+				host,
+				reply.AckIdx,
+			)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to repair follower %s", host)
+}
+
 func (bank *Bank) AppendEntries(request common.AppendEntriesRequest, reply *common.AppendEntriesReply) error {
+
+	becameFollower := false
+
 	bank.raftNode.mutex.Lock()
-	defer bank.raftNode.mutex.Unlock()
+	defer func() {
+		bank.raftNode.mutex.Unlock()
+
+		if becameFollower {
+			go awaitHeartbeats(bank)
+		}
+	}()
 
 	reply.OK = false
 	reply.Term = bank.raftNode.term
@@ -840,8 +965,13 @@ func (bank *Bank) AppendEntries(request common.AppendEntriesRequest, reply *comm
 	}
 
 	if request.Term > bank.raftNode.term {
-		bank.raftNode.term = request.Term
+		if err := stepDown(bank, request.Term); err != nil {
+			return err
+		}
+		becameFollower = true
+	} else if bank.raftNode.state == StateCandidate {
 		bank.raftNode.state = StateFollower
+		becameFollower = true
 	}
 
 	bank.raftNode.currentLeader = request.LeaderAddr
@@ -868,6 +998,10 @@ func (bank *Bank) AppendEntries(request common.AppendEntriesRequest, reply *comm
 
 	for _, entry := range request.Entries {
 		existing, readErr := getLogEntry(bank.db, entry.LogIdx)
+		bank.debugLog("FOLLOWER %s RECEIVES REQUEST %d",
+			bank.raftNode.address,
+			entry.RequestID,
+		)
 
 		if readErr != nil {
 			if !errors.Is(readErr, sql.ErrNoRows) {
@@ -904,6 +1038,11 @@ func (bank *Bank) AppendEntries(request common.AppendEntriesRequest, reply *comm
 	reply.OK = true
 	reply.Term = bank.raftNode.term
 	reply.AckIdx = newLastLoggedIdx
+
+	if becameFollower {
+		go awaitHeartbeats(bank)
+	}
+
 	return nil
 }
 
@@ -977,4 +1116,24 @@ func (bank *Bank) applyLogEntries(endLogIdx int64, reply *common.OperationReply)
 		}
 	}
 	return nil
+}
+
+func initDebugLog(addr string) (*os.File, error) {
+	if err := os.MkdirAll("logs", 0755); err != nil {
+		return nil, err
+	}
+
+	filename := fmt.Sprintf("logs/debug-%s.log", addr)
+	return os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+}
+
+func (bank *Bank) debugLog(format string, args ...any) {
+	bank.mutex.Lock()
+	defer bank.mutex.Unlock()
+
+	if bank.logFile == nil {
+		return
+	}
+
+	fmt.Fprintf(bank.logFile, format+"\n", args...)
 }

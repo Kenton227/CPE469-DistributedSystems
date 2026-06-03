@@ -14,7 +14,9 @@ services:
     container_name: bankServer1
     ports:
       - "9001:1234"
-    command: [ "-addr", "bankserver1", "-L" ]
+    command: [ "-addr", "bankserver1" ]
+    volumes:
+      - ./logs:/app/logs
 
   bankserver2:
     build:
@@ -24,6 +26,8 @@ services:
     ports:
       - "9002:1234"
     command: [ "-addr", "bankserver2" ]
+    volumes:
+      - ./logs:/app/logs
 
   bankserver3:
     build:
@@ -33,6 +37,30 @@ services:
     ports:
       - "9003:1234"
     command: [ "-addr", "bankserver3" ]
+    volumes:
+      - ./logs:/app/logs
+
+  bankserver4:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer4
+    ports:
+      - "9004:1234"
+    command: [ "-addr", "bankserver4" ]
+    volumes:
+      - ./logs:/app/logs
+
+  bankserver5:
+    build:
+      context: .
+      dockerfile: dockerfile.bankServer
+    container_name: bankServer5
+    ports:
+      - "9005:1234"
+    command: [ "-addr", "bankserver5" ]
+    volumes:
+      - ./logs:/app/logs
 
   customer:
     build:
@@ -40,7 +68,7 @@ services:
       dockerfile: dockerfile.customer
     container_name: customer
     ports:
-      - "9004:1234"
+      - "9010:1234"
 
   teller:
     build:
@@ -48,4 +76,4 @@ services:
       dockerfile: dockerfile.teller
     container_name: teller
     ports:
-      - "9005:1234"
+      - "9011:1234"
