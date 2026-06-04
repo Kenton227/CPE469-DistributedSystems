@@ -5,21 +5,7 @@
 
 ## Usage:
 
-- recommended to use python venv:
-
-```
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-- install dependencies:
-
-```
-pip install -r requirements.txt
-```
-
-- download dataset:
+- download the dataset on the host first:
 
 ```
 cd ./dataset/
@@ -27,8 +13,24 @@ cd ./dataset/
 cd ../
 ```
 
-- run analysis script:
+- build the Spark image:
 
 ```
-python3 analyzeData.py
+docker compose build
 ```
+
+- run the analysis on a Spark master with two worker containers:
+
+```
+docker compose up app
+```
+
+- stop the cluster containers when finished:
+
+```
+docker compose down
+```
+
+## Notes:
+
+- results are written to `./output/analysisOutput.txt`.

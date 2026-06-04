@@ -1,3 +1,5 @@
+import os
+
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -7,12 +9,12 @@ from pyspark.sql.types import (
 )
 
 
-def printRanked(df, title, order_col):
-    print(f"\n{title}")
-    df.orderBy(F.col(order_col).desc()).show(
+def rankedTable(df, title, order_col):
+    table = df.orderBy(F.col(order_col).desc())._show_string(
         100,
         truncate=False,
     )
+    return f"\n{title}\n{table}\n"
 
 
 def main():
@@ -93,26 +95,32 @@ def main():
         )
     )
 
-    printRanked(
-        tcgRankings,
-        "TCGs ranked by total products",
-        "total_products"
-    )
-    printRanked(
-        tcgRankings,
-        "TCGs ranked by average card price",
-        "avg_card_price"
-    )
-    printRanked(
-        tcgRankings,
-        "TCGs ranked by average drift",
-        "avg_drift"
-    )
-    printRanked(
-        tcgRankings,
-        "TCGs ranked by average volatility",
-        "avg_volatility"
-    )
+    outputPath = "./output/analysisOutput.txt"
+    outputDir = os.path.dirname(outputPath)
+    if outputDir:
+        os.makedirs(outputDir, exist_ok=True)
+
+    with open(outputPath, "w", encoding="utf-8") as outputFile:
+        outputFile.write(rankedTable(
+            tcgRankings,
+            "TCGs ranked by total products",
+            "total_products"
+        ))
+        outputFile.write(rankedTable(
+            tcgRankings,
+            "TCGs ranked by average card price",
+            "avg_card_price"
+        ))
+        outputFile.write(rankedTable(
+            tcgRankings,
+            "TCGs ranked by average drift",
+            "avg_drift"
+        ))
+        outputFile.write(rankedTable(
+            tcgRankings,
+            "TCGs ranked by average volatility",
+            "avg_volatility"
+        ))
 
     spark.stop()
 
