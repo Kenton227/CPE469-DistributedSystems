@@ -1,0 +1,48 @@
+services:
+  spark-master:
+    image: prog9-spark:latest
+    build: .
+    container_name: prog9-spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host 0.0.0.0 --port 1234
+    ports:
+      - "1234:1234"
+
+  spark-worker-1:
+    image: prog9-spark:latest
+    build: .
+    container_name: prog9-spark-worker-1
+    depends_on:
+      - spark-master
+    volumes:
+      - ./dataset:/app/dataset:ro
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:1234 --cores 1 --memory 1G
+
+  spark-worker-2:
+    image: prog9-spark:latest
+    build: .
+    container_name: prog9-spark-worker-2
+    depends_on:
+      - spark-master
+    volumes:
+      - ./dataset:/app/dataset:ro
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:1234 --cores 1 --memory 1G
+
+  app:
+    image: prog9-spark:latest
+    build: .
+    container_name: prog9-analysis
+    user: root
+    depends_on:
+      - spark-master
+      - spark-worker-1
+      - spark-worker-2
+    volumes:
+      - ./dataset:/app/dataset:ro
+      - ./output:/app/output
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - spark://spark-master:1234
+      - --conf
+      - spark.executor.instances=2
+      - /app/analyzeData.py

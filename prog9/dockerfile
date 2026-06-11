@@ -1,0 +1,7 @@
+FROM apache/spark:4.0.0
+
+WORKDIR /app
+
+COPY analyzeData.py ./
+
+CMD ["/opt/spark/bin/spark-submit", "--master", "spark://spark-master:1234", "--conf", "spark.executor.instances=2", "/app/analyzeData.py"]
